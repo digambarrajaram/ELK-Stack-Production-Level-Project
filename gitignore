@@ -1,0 +1,30 @@
+# .gitignore
+
+# Secrets — NEVER commit these
+.env
+*.pem
+*.key
+security/certs/
+*.p12
+
+# Terraform state
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+
+# Kibana dashboard exports (optional — include if you want dashboards versioned)
+# phase-3-kibana-dashboards/dashboards/*.ndjson
+
+# Docker volumes data
+es-data/
+filebeat-data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+      - ./configs/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - elk-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: logstash
+    volumes:
+      - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
+    ports:
+      - "5044:5044"    # Beats input
+      - "5000:5000"    # TCP input
+      - "9600:9600"    # Logstash monitoring API
+    networks:
+      - elk-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    volumes:
+      - ./configs/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    ports:
+      - "5601:5601"
+    networks:
+      - elk-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.11.0
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./phase-2-log-ingestion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/log:/var/log:ro              # System logs
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro  # Docker logs
+      - filebeat-data:/usr/share/filebeat/data
+    networks:
+      - elk-net
+    depends_on:
+      - logstash
+    command: filebeat -e -strict.perms=false
+
+volumes:
+  es-data:
+    driver: local
+  filebeat-data:
+    driver: local
+
+networks:
+  elk-net:
+    driver: bridge
