@@ -1,0 +1,10 @@
+http.host: "0.0.0.0"
+http.port: 9600
+
+# Pipeline settings
+pipeline.workers: 2
+pipeline.batch.size: 125
+pipeline.batch.delay: 50
+
+# X-Pack monitoring (reports to ES)
+xpack.monitoring.enabled: false
