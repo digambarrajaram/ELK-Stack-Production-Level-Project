@@ -1,0 +1,82 @@
+filebeat.inputs:
+
+  # Nginx access logs
+  - type: log
+    id: nginx-access
+    enabled: true
+    paths:
+      - /var/log/nginx/access.log
+    tags: ["nginx", "access"]
+    fields:
+      log_type: nginx_access
+      environment: production
+    fields_under_root: true
+
+  # Nginx error logs
+  - type: log
+    id: nginx-error
+    enabled: true
+    paths:
+      - /var/log/nginx/error.log
+    tags: ["nginx", "error"]
+    fields:
+      log_type: nginx_error
+      environment: production
+    fields_under_root: true
+
+  # Application JSON logs
+  - type: log
+    id: app-json
+    enabled: true
+    paths:
+      - /var/log/myapp/*.log
+    tags: ["application"]
+    fields:
+      log_type: app_json
+      environment: production
+    fields_under_root: true
+    # Parse multiline stack traces as single events
+    multiline.pattern: '^\{'
+    multiline.negate: true
+    multiline.match: after
+
+  # Syslog (auth, system events)
+  - type: log
+    id: syslog
+    enabled: true
+    paths:
+      - /var/log/syslog
+      - /var/log/auth.log
+    tags: ["syslog"]
+    fields:
+      log_type: syslog
+      environment: production
+    fields_under_root: true
+
+  # Docker container logs
+  - type: container
+    id: docker-containers
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    tags: ["docker"]
+    fields:
+      log_type: docker
+    fields_under_root: true
+
+# Ship to Logstash (not directly to ES — we want to filter first)
+output.logstash:
+  hosts: ["logstash:5044"]
+  loadbalance: true
+  ttl: 30s
+
+# Filebeat internal registry (tracks position in each log file)
+filebeat.registry.path: /usr/share/filebeat/data/registry
+
+# Logging
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat.log
+  keepfiles: 3
