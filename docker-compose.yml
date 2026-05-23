@@ -76,6 +76,7 @@ services:
       - logstash
     command: filebeat -e -strict.perms=false
 
+
 volumes:
   es-data:
     driver: local
