@@ -1,0 +1,20 @@
+cluster.name: elk-production
+node.name: elk-node-1
+
+# Network
+network.host: 0.0.0.0
+http.port: 9200
+
+# Discovery (single-node for this project)
+discovery.type: single-node
+
+# Memory lock (prevents swapping)
+bootstrap.memory_lock: true
+
+# Security — disable for Phase 1, enable in Phase 5
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+
+# Paths
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
