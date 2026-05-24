@@ -40,7 +40,9 @@ services:
       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
     ports:
-      - "5044:5044"    # Beats input
+      - "5044:5044"    # Beats input for app-logs pipleline
+      - "5046:5046"    # Beats input for syslog pipeline
+      - "5045:5045"    # Beats input for nginx pipeline
       - "5000:5000"    # TCP input
       - "9600:9600"    # Logstash monitoring API
     networks:
