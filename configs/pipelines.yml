@@ -1,12 +1,11 @@
-# /usr/share/logstash/config/pipelines.yml
-- pipeline.id: nginx
-  path.config: "/usr/share/logstash/pipeline/nginx.conf"
-  pipeline.workers: 2
+# =============================================================================
+# Logstash Pipelines — single pipeline, single port 5044
+# Delete or move out any old nginx.conf / app-logs.conf / syslog.conf
+# so Logstash does not load them alongside this one.
+# =============================================================================
 
-- pipeline.id: app-logs
-  path.config: "/usr/share/logstash/pipeline/app-logs.conf"
+- pipeline.id: main
+  path.config: "/usr/share/logstash/pipeline/combined.conf"
   pipeline.workers: 2
-
-- pipeline.id: syslog
-  path.config: "/usr/share/logstash/pipeline/syslog.conf"
-  pipeline.workers: 1
+  pipeline.batch.size: 125
+  pipeline.batch.delay: 50
