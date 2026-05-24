@@ -27,6 +27,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    mem-limit: 2g
 
   logstash:
     image: docker.elastic.co/logstash/logstash:8.11.0
@@ -46,6 +47,7 @@ services:
         condition: service_healthy
     environment:
       - LS_JAVA_OPTS=-Xms512m -Xmx512m
+    mem-limit: 1g
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.0
@@ -61,6 +63,9 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    environment:
+      - NODE_OPTIONS="--max-old-space-size=512"
+    mem-limit: 800m
 
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.11.0
@@ -76,6 +81,7 @@ services:
     depends_on:
       - logstash
     command: filebeat -e -strict.perms=false
+    mem-limit: 250m
 
 
 volumes:
