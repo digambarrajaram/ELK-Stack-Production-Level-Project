@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
 
   elasticsearch:
@@ -38,8 +40,9 @@ services:
       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
     ports:
-      - "5044:5044"   # Single Beats input — all log types
-      - "9600:9600"   # Logstash monitoring API
+      - "5044:5044"    # Beats input for app-logs pipleline
+      - "5000:5000"    # TCP input
+      - "9600:9600"    # Logstash monitoring API
     networks:
       - elk-net
     depends_on:
@@ -50,7 +53,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g   # FIX: was "1 g" with a space — invalid syntax
+          memory: 1 g
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.0
@@ -67,7 +70,7 @@ services:
       elasticsearch:
         condition: service_healthy
     environment:
-      - NODE_OPTIONS=--max-old-space-size=512   # FIX: removed extra quotes around value
+      - NODE_OPTIONS="--max-old-space-size=512"
     deploy:
       resources:
         limits:
@@ -79,8 +82,8 @@ services:
     user: root
     volumes:
       - ./phase-2-log-ingestion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - /var/log:/var/log:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log:/var/log:ro              # System logs
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro  # Docker logs
       - filebeat-data:/usr/share/filebeat/data
     networks:
       - elk-net
