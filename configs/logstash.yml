@@ -1,13 +1,14 @@
-http.host: "0.0.0.0"
-http.port: 9600
+# Logstash 8.x — api.http.* keys replace the 7.x http.host / http.port
+api.http.host: "0.0.0.0"
+api.http.port: 9600
 
-# Set verbose logging for diagnostics (temporary)
-log.level: debug
+# Logging (set to info once stable; debug is noisy)
+log.level: info
 
-# Pipeline settings
+# Pipeline settings (also set per-pipeline in pipelines.yml, but useful as defaults)
 pipeline.workers: 2
 pipeline.batch.size: 125
 pipeline.batch.delay: 50
 
-# X-Pack monitoring (reports to ES)
+# X-Pack monitoring (push metrics to Elasticsearch — disabled here, use Stack Monitoring in Kibana instead)
 xpack.monitoring.enabled: false
