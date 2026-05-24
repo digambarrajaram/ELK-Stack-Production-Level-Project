@@ -1,6 +1,9 @@
 http.host: "0.0.0.0"
 http.port: 9600
 
+# Set verbose logging for diagnostics (temporary)
+log.level: debug
+
 # Pipeline settings
 pipeline.workers: 2
 pipeline.batch.size: 125
