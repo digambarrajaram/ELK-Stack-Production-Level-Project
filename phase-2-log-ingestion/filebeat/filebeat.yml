@@ -1,82 +1,75 @@
+# =============================================================================
+# Filebeat — single Logstash output on port 5044
+# The [log_type] field drives routing inside combined.conf
+# =============================================================================
+
 filebeat.inputs:
 
-  # Nginx access logs
+  # ---------------------------------------------------------------------------
+  # Application JSON logs  ->  log_type: app_json
+  # ---------------------------------------------------------------------------
   - type: log
-    id: nginx-access
+    id: app-json-logs
+    enabled: true
+    paths:
+      - /var/log/app/*.log
+      - /var/log/app/**/*.log
+    fields:
+      log_type: "app_json"
+    fields_under_root: true
+    include_lines: ['^\{']
+
+  # ---------------------------------------------------------------------------
+  # Nginx access logs  ->  log_type: nginx_access
+  # ---------------------------------------------------------------------------
+  - type: log
+    id: nginx-access-logs
     enabled: true
     paths:
       - /var/log/nginx/access.log
-    tags: ["nginx", "access"]
+      - /var/log/nginx/access.log.*
     fields:
-      log_type: nginx_access
-      environment: production
+      log_type: "nginx_access"
     fields_under_root: true
+    exclude_files: ['\.gz$']
 
-  # Nginx error logs
+  # ---------------------------------------------------------------------------
+  # Syslog  ->  log_type: syslog
+  # ---------------------------------------------------------------------------
   - type: log
-    id: nginx-error
-    enabled: true
-    paths:
-      - /var/log/nginx/error.log
-    tags: ["nginx", "error"]
-    fields:
-      log_type: nginx_error
-      environment: production
-    fields_under_root: true
-
-  # Application JSON logs
-  - type: log
-    id: app-json
-    enabled: true
-    paths:
-      - /var/log/myapp/*.log
-    tags: ["application"]
-    fields:
-      log_type: app_json
-      environment: production
-    fields_under_root: true
-    # Parse multiline stack traces as single events
-    multiline.pattern: '^\{'
-    multiline.negate: true
-    multiline.match: after
-
-  # Syslog (auth, system events)
-  - type: log
-    id: syslog
+    id: syslog-logs
     enabled: true
     paths:
       - /var/log/syslog
+      - /var/log/syslog.*
       - /var/log/auth.log
-    tags: ["syslog"]
+      - /var/log/kern.log
     fields:
-      log_type: syslog
-      environment: production
+      log_type: "syslog"
     fields_under_root: true
+    exclude_files: ['\.gz$']
 
-  # Docker container logs
-  - type: container
-    id: docker-containers
-    enabled: true
-    paths:
-      - /var/lib/docker/containers/*/*.log
-    tags: ["docker"]
-    fields:
-      log_type: docker
-    fields_under_root: true
+# =============================================================================
+# Processors
+# =============================================================================
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_docker_metadata: ~
 
-# Ship to Logstash (not directly to ES — we want to filter first)
+# =============================================================================
+# Output — everything goes to one port, combined.conf routes internally
+# =============================================================================
 output.logstash:
   hosts: ["logstash:5044"]
-  loadbalance: true
-  ttl: 30s
 
-# Filebeat internal registry (tracks position in each log file)
-filebeat.registry.path: /usr/share/filebeat/data/registry
-
+# =============================================================================
 # Logging
+# =============================================================================
 logging.level: info
-logging.to_files: true
-logging.files:
-  path: /var/log/filebeat
-  name: filebeat.log
-  keepfiles: 3
+
+setup.kibana:
+  host: "kibana:5601"
+
+setup.template.enabled: false
+setup.ilm.enabled: false
