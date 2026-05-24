@@ -40,7 +40,7 @@ services:
       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
     ports:
-      - "5044:5044"    # Beats input for app-logs pipleline
+      - "5044:5044"    # Beats input
       - "5000:5000"    # TCP input
       - "9600:9600"    # Logstash monitoring API
     networks:
@@ -49,11 +49,16 @@ services:
       elasticsearch:
         condition: service_healthy
     environment:
-      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+      # FIX 1: Increased from 512m to 1g — geoip + useragent + grok filters
+      # need headroom; 512m caused the arraycopy JVM crash and connection resets.
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
     deploy:
       resources:
         limits:
-          memory: 1 g
+          # FIX 2: Was "1 g" (with a space) — Docker couldn't parse this correctly.
+          # Must be "1500m" or "1.5g" with no space. Set to 1500m to give the
+          # 1g JVM heap room for off-heap (network buffers, metaspace, etc.).
+          memory: 1500m
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.0
@@ -82,8 +87,8 @@ services:
     user: root
     volumes:
       - ./phase-2-log-ingestion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - /var/log:/var/log:ro              # System logs
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro  # Docker logs
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - filebeat-data:/usr/share/filebeat/data
     networks:
       - elk-net
