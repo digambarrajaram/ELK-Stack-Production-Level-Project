@@ -24,88 +24,81 @@ Filebeat watches log files and ships lines to Logstash.
 
 **`filebeat/filebeat.yml`**
 ```yaml
+# =============================================================================
+# Filebeat — single Logstash output on port 5044
+# The [log_type] field drives routing inside combined.conf
+# =============================================================================
+
 filebeat.inputs:
 
-  # Nginx access logs
+  # ---------------------------------------------------------------------------
+  # Application JSON logs  ->  log_type: app_json
+  # ---------------------------------------------------------------------------
   - type: log
-    id: nginx-access
-    enabled: true
-    paths:
-      - /var/log/nginx/access.log
-    tags: ["nginx", "access"]
-    fields:
-      log_type: nginx_access
-      environment: production
-    fields_under_root: true
-
-  # Nginx error logs
-  - type: log
-    id: nginx-error
-    enabled: true
-    paths:
-      - /var/log/nginx/error.log
-    tags: ["nginx", "error"]
-    fields:
-      log_type: nginx_error
-      environment: production
-    fields_under_root: true
-
-  # Application JSON logs
-  - type: log
-    id: app-json
+    id: app-json-logs
     enabled: true
     paths:
       - /var/log/myapp/*.log
-    tags: ["application"]
+      - /var/log/myapp/**/*.log
     fields:
-      log_type: app_json
-      environment: production
+      log_type: "app_json"
     fields_under_root: true
-    # Parse multiline stack traces as single events
-    multiline.pattern: '^\{'
-    multiline.negate: true
-    multiline.match: after
+    include_lines: ['^\{']
 
-  # Syslog (auth, system events)
+  # ---------------------------------------------------------------------------
+  # Nginx access logs  ->  log_type: nginx_access
+  # ---------------------------------------------------------------------------
   - type: log
-    id: syslog
+    id: nginx-access-logs
+    enabled: true
+    paths:
+      - /var/log/nginx/access.log
+      - /var/log/nginx/access.log.*
+    fields:
+      log_type: "nginx_access"
+    fields_under_root: true
+    exclude_files: ['\.gz$']
+
+  # ---------------------------------------------------------------------------
+  # Syslog  ->  log_type: syslog
+  # ---------------------------------------------------------------------------
+  - type: log
+    id: syslog-logs
     enabled: true
     paths:
       - /var/log/syslog
+      - /var/log/syslog.*
       - /var/log/auth.log
-    tags: ["syslog"]
+      - /var/log/kern.log
     fields:
-      log_type: syslog
-      environment: production
+      log_type: "syslog"
     fields_under_root: true
+    exclude_files: ['\.gz$']
 
-  # Docker container logs
-  - type: container
-    id: docker-containers
-    enabled: true
-    paths:
-      - /var/lib/docker/containers/*/*.log
-    tags: ["docker"]
-    fields:
-      log_type: docker
-    fields_under_root: true
+# =============================================================================
+# Processors
+# =============================================================================
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_docker_metadata: ~
 
-# Ship to Logstash (not directly to ES — we want to filter first)
+# =============================================================================
+# Output — everything goes to one port, combined.conf routes internally
+# =============================================================================
 output.logstash:
   hosts: ["logstash:5044"]
-  loadbalance: true
-  ttl: 30s
 
-# Filebeat internal registry (tracks position in each log file)
-filebeat.registry.path: /usr/share/filebeat/data/registry
-
+# =============================================================================
 # Logging
+# =============================================================================
 logging.level: info
-logging.to_files: true
-logging.files:
-  path: /var/log/filebeat
-  name: filebeat.log
-  keepfiles: 3
+
+setup.kibana:
+  host: "kibana:5601"
+
+setup.template.enabled: false
+setup.ilm.enabled: false
 ```
 
 ---
@@ -120,65 +113,63 @@ Create `configs/pipelines.yml` (mount this into the Logstash container):
 
 ```yaml
 # /usr/share/logstash/config/pipelines.yml
-- pipeline.id: nginx
-  path.config: "/usr/share/logstash/pipeline/nginx.conf"
+# =============================================================================
+# Logstash Pipelines — single pipeline, single port 5044
+# Delete or move out any old nginx.conf / app-logs.conf / syslog.conf
+# so Logstash does not load them alongside this one.
+# =============================================================================
+
+- pipeline.id: main
+  path.config: "/usr/share/logstash/pipeline/combined.conf"
   pipeline.workers: 2
+  pipeline.batch.size: 125
+  pipeline.batch.delay: 50
 
-- pipeline.id: app-logs
-  path.config: "/usr/share/logstash/pipeline/app-logs.conf"
-  pipeline.workers: 2
-
-- pipeline.id: syslog
-  path.config: "/usr/share/logstash/pipeline/syslog.conf"
-  pipeline.workers: 1
-```
-
-Update `docker-compose.yml` to mount this file:
-```yaml
-logstash:
-  volumes:
-    - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
-    - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
-    - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
 ```
 
 ---
 
-### 2.2 Nginx Access Log Pipeline
+### 2.2 Combined Pipeline for Nginx Access Log, Application JSON Log and Syslog Pipeline
 
-**`logstash/pipelines/nginx.conf`**
+**`logstash/pipelines/combined.conf`**
 ```ruby
+# =============================================================================
+# combined.conf  —  Single Beats input on port 5044
+# Routing is driven by the [log_type] field set in filebeat.yml:
+#   log_type: nginx_access  ->  nginx-access-YYYY.MM.dd
+#   log_type: app_json      ->  app-logs-YYYY.MM.dd
+#   log_type: syslog        ->  syslog-YYYY.MM.dd
+# =============================================================================
+
 input {
   beats {
-    port  => 5044
-    tags  => ["nginx", "access"]
-    # Only process events tagged as nginx
-    add_field => { "[@metadata][pipeline]" => "nginx" }
+    port => 5044
   }
 }
 
-filter {
-  # Only process nginx_access logs from this pipeline
-  if [log_type] != "nginx_access" {
-    drop { }
-  }
+# =============================================================================
+# FILTERS
+# =============================================================================
 
-  # Parse the Nginx Combined Log Format
+filter {
+
+  # ---------------------------------------------------------------------------
+  # NGINX ACCESS LOGS
+  # ---------------------------------------------------------------------------
+  if [log_type] == "nginx_access" {
+
   grok {
     match => {
-      "message" => '%{IPORHOST:client_ip} - %{DATA:user} \[%{HTTPDATE:request_time}\] "%{WORD:http_method} %{DATA:request_path} HTTP/%{NUMBER:http_version}" %{NUMBER:http_status_code:int} %{NUMBER:response_bytes:int} "%{DATA:referrer}" "%{DATA:user_agent}"'
+      "message" => '%{IPORHOST:client_ip} - (%{DATA:user}|-) \[%{HTTPDATE:request_time}\] "%{WORD:http_method} %{DATA:request_path} HTTP/%{NUMBER:http_version}" %{NUMBER:http_status_code:int} %{NUMBER:response_bytes:int} "%{DATA:referrer}" "%{DATA:user_agent}"'
     }
     tag_on_failure => ["_grok_parse_failure"]
   }
 
-  # Parse the timestamp into @timestamp
   date {
     match => ["request_time", "dd/MMM/yyyy:HH:mm:ss Z"]
     target => "@timestamp"
-    remove_field => ["request_time"]
   }
 
-  # Categorize HTTP status codes
   if [http_status_code] {
     if [http_status_code] >= 500 {
       mutate { add_field => { "status_category" => "5xx_server_error" } }
@@ -191,209 +182,210 @@ filter {
     }
   }
 
-  # GeoIP enrichment — maps client IP to country/city
-  geoip {
-    source => "client_ip"
-    target => "geoip"
-    fields => ["city_name", "country_name", "country_code2", "location"]
+  # Fixed GeoIP processing block (Removed restrictive sub-field filtering arrays)
+  if [client_ip] and "_grok_parse_failure" not in [tags] {
+    geoip {
+      source => "client_ip"
+      target => "geoip"
+    }
   }
 
-  # Parse the User-Agent string into browser/OS/device
   useragent {
     source => "user_agent"
     target => "ua"
   }
 
-  # Extract URL path components
   if [request_path] {
     grok {
       match => { "request_path" => "^%{URIPATH:url_path}(?:\?%{GREEDYDATA:url_query})?" }
     }
   }
 
-  # Clean up — remove raw message if successfully parsed
+  # Safe cleanup: Keep tracking components alive
   if "_grok_parse_failure" not in [tags] {
     mutate {
-      remove_field => ["message", "agent", "ecs", "host", "input", "log"]
+      remove_field => ["message", "request_time"]
     }
-  }
-}
-
-output {
-  # Route to the correct index
-  elasticsearch {
-    hosts    => ["elasticsearch:9200"]
-    index    => "nginx-access-%{+YYYY.MM.dd}"
-    # Use ILM in Phase 5
-  }
-
-  # Debug — uncomment to see parsed output in Logstash logs
-  # stdout { codec => rubydebug }
-}
-```
-
----
-
-### 2.3 Application JSON Log Pipeline
-
-**`logstash/pipelines/app-logs.conf`**
-```ruby
-input {
-  beats {
-    port  => 5044
-    tags  => ["application"]
-  }
-}
-
-filter {
-  if [log_type] != "app_json" {
-    drop { }
-  }
-
-  # Parse JSON application logs
-  json {
-    source => "message"
-    target => "app"
-    tag_on_failure => ["_json_parse_failure"]
-  }
-
-  # If JSON parsing succeeded, promote key fields to root level
-  if "_json_parse_failure" not in [tags] {
-    mutate {
-      rename => {
-        "[app][level]"          => "log_level"
-        "[app][message]"        => "log_message"
-        "[app][service]"        => "service_name"
-        "[app][trace_id]"       => "trace_id"
-        "[app][response_time]"  => "response_time_ms"
-        "[app][status_code]"    => "http_status_code"
-        "[app][error]"          => "error_message"
-      }
-    }
-  }
-
-  # Parse timestamp from app log (if present)
-  if [app][timestamp] {
-    date {
-      match => ["[app][timestamp]", "ISO8601", "yyyy-MM-dd HH:mm:ss"]
-      target => "@timestamp"
-      remove_field => ["[app][timestamp]"]
-    }
-  }
-
-  # Normalize log levels
-  if [log_level] {
-    mutate {
-      uppercase => ["log_level"]
-    }
-  }
-
-  # Tag slow requests (> 1000ms)
-  if [response_time_ms] and [response_time_ms] > 1000 {
-    mutate {
-      add_tag   => ["slow_request"]
-      add_field => { "performance_flag" => "slow" }
-    }
-  }
-
-  # Tag errors
-  if [log_level] == "ERROR" or [log_level] == "FATAL" {
-    mutate { add_tag => ["error"] }
   }
 
   mutate {
-    remove_field => ["message", "agent", "ecs", "host", "input"]
+    add_field => { "[@metadata][target_index]" => "nginx-access-%{+YYYY.MM.dd}" }
   }
 }
 
-output {
-  elasticsearch {
-    hosts => ["elasticsearch:9200"]
-    index => "app-logs-%{+YYYY.MM.dd}"
-  }
-}
-```
 
----
+  # ---------------------------------------------------------------------------
+  # APPLICATION JSON LOGS
+  # ---------------------------------------------------------------------------
+  else if [log_type] == "app_json" {
 
-### 2.4 Syslog Pipeline
-
-**`logstash/pipelines/syslog.conf`**
-```ruby
-input {
-  beats {
-    port => 5044
-    tags => ["syslog"]
-  }
-}
-
-filter {
-  if [log_type] != "syslog" {
-    drop { }
-  }
-
-  # Parse standard syslog format
-  grok {
-    match => {
-      "message" => "%{SYSLOGTIMESTAMP:syslog_timestamp} %{SYSLOGHOST:syslog_host} %{DATA:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}"
+    json {
+      source => "message"
+      target => "app"
+      tag_on_failure => ["_json_parse_failure"]
     }
-    tag_on_failure => ["_syslog_parse_failure"]
-  }
 
-  # Parse syslog timestamp
-  date {
-    match => ["syslog_timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss"]
-    target => "@timestamp"
-  }
-
-  # Detect failed SSH login attempts
-  if [syslog_program] == "sshd" {
-    if [syslog_message] =~ /Failed password/ {
-      grok {
-        match => {
-          "syslog_message" => "Failed password for (?:invalid user )?%{USERNAME:ssh_failed_user} from %{IPORHOST:ssh_source_ip}"
+    if "_json_parse_failure" not in [tags] {
+      mutate {
+        rename => {
+          "[app][level]"          => "log_level"
+          "[app][message]"        => "log_message"
+          "[app][service]"        => "service_name"
+          "[app][trace_id]"       => "trace_id"
+          "[app][response_time]"  => "response_time_ms"
+          "[app][status_code]"    => "http_status_code"
+          "[app][error]"          => "error_message"
         }
       }
-      mutate {
-        add_tag   => ["ssh_failed_login"]
-        add_field => { "security_event" => "ssh_failed_login" }
+    }
+
+    if [app][timestamp] {
+      date {
+        match => ["[app][timestamp]", "ISO8601", "yyyy-MM-dd HH:mm:ss"]
+        target => "@timestamp"
+        remove_field => ["[app][timestamp]"]
       }
     }
 
-    if [syslog_message] =~ /Accepted/ {
+    if [log_level] {
+      mutate { uppercase => ["log_level"] }
+    }
+
+    if [response_time_ms] and [response_time_ms] > 1000 {
       mutate {
-        add_tag   => ["ssh_success"]
-        add_field => { "security_event" => "ssh_success" }
+        add_tag   => ["slow_request"]
+        add_field => { "performance_flag" => "slow" }
       }
     }
-  }
 
-  # Detect OOM killer
-  if [syslog_message] =~ /Out of memory/ or [syslog_message] =~ /oom-kill/ {
-    mutate {
-      add_tag   => ["oom_event"]
-      add_field => { "system_event" => "oom_kill" }
+    if [log_level] == "ERROR" or [log_level] == "FATAL" {
+      mutate { add_tag => ["error"] }
     }
-  }
 
-  # Detect disk full
-  if [syslog_message] =~ /No space left on device/ {
     mutate {
-      add_tag   => ["disk_full"]
-      add_field => { "system_event" => "disk_full" }
+      remove_field => ["message", "agent", "ecs", "host", "input"]
+      add_field    => { "[@metadata][target_index]" => "app-logs-%{+YYYY.MM.dd}" }
     }
+
   }
 
-  mutate {
-    remove_field => ["message", "agent", "ecs", "host", "input"]
+  # ---------------------------------------------------------------------------
+  # SYSLOG
+  # ---------------------------------------------------------------------------
+  else if [log_type] == "syslog" {
+
+    # If Filebeat placed the raw/syslog line in event.original (common for modern beats),
+    # use that as the source for parsing so we don't rely only on the incoming [message] field.
+    if [event][original] {
+      mutate {
+        replace => { "message" => "%{[event][original]}" }
+      }
+    }
+
+    # Patterns to handle ISO8601-prefixed lines, standard syslog, Docker-prefixed, and a fallback.
+    grok {
+      match => {
+        "message" => [
+          # ISO8601 timestamp then host and program: "2026-05-23T17:00:58.571431+00:00 hostname program[pid]: message"
+          "%{TIMESTAMP_ISO8601:syslog_timestamp} %{SYSLOGHOST:syslog_host} %{DATA:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}",
+          # Standard: "May 24 11:04:19 hostname program[pid]: message"
+          "%{SYSLOGTIMESTAMP:syslog_timestamp} %{SYSLOGHOST:syslog_host} %{DATA:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}",
+          # Docker-prefixed: "hostname May 24 11:04:19 hostname program[pid]: message"
+          "%{SYSLOGHOST} %{SYSLOGTIMESTAMP:syslog_timestamp} %{SYSLOGHOST:syslog_host} %{DATA:syslog_program}(?:\[%{POSINT:syslog_pid}\])?: %{GREEDYDATA:syslog_message}",
+          # Fallback: grab whatever is after timestamp for debugging
+          "%{SYSLOGTIMESTAMP:syslog_timestamp} %{GREEDYDATA:syslog_message}"
+        ]
+      }
+      tag_on_failure => ["_syslog_parse_failure"]
+    }
+
+    # Ubuntu/systemd syslog lines carry microsecond-precision timestamps, e.g.:
+    #   "2026-05-23T17:00:58.570533+00:00"
+    # Logstash's "ISO8601" shorthand uses Joda-time, which only parses up to
+    # milliseconds (3 decimal places). Six decimal places causes a silent parse
+    # failure, leaving @timestamp at ingest time instead of the log's real time.
+    #
+    # Fix: list the explicit Joda pattern with 6-digit fractional seconds first,
+    # then fall back to "ISO8601" (covers 0–3 decimal places), then the legacy
+    # syslog month/day formats for older log lines.
+    date {
+      match => [
+        "syslog_timestamp",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSSZ",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+        "ISO8601",
+        "MMM  d HH:mm:ss",
+        "MMM dd HH:mm:ss",
+        "MMM d HH:mm:ss"
+      ]
+      target => "@timestamp"
+      remove_field => ["syslog_timestamp"]
+    }
+
+    if [syslog_program] == "sshd" {
+      if [syslog_message] =~ /Failed password/ {
+        grok {
+          match => {
+            "syslog_message" => "Failed password for (?:invalid user )?%{USERNAME:ssh_failed_user} from %{IPORHOST:ssh_source_ip}"
+          }
+          tag_on_failure => ["_ssh_grok_failure"]
+        }
+        mutate {
+          add_tag   => ["ssh_failed_login"]
+          add_field => { "security_event" => "ssh_failed_login" }
+        }
+      }
+
+      if [syslog_message] =~ /Accepted/ {
+        mutate {
+          add_tag   => ["ssh_success"]
+          add_field => { "security_event" => "ssh_success" }
+        }
+      }
+    }
+
+    if [syslog_message] =~ /Out of memory/ or [syslog_message] =~ /oom-kill/ {
+      mutate {
+        add_tag   => ["oom_event"]
+        add_field => { "system_event" => "oom_kill" }
+      }
+    }
+
+    if [syslog_message] =~ /No space left on device/ {
+      mutate {
+        add_tag   => ["disk_full"]
+        add_field => { "system_event" => "disk_full" }
+      }
+    }
+
+    mutate {
+      remove_field => ["message", "agent", "ecs", "host", "input"]
+      add_field    => { "[@metadata][target_index]" => "syslog-%{+YYYY.MM.dd}" }
+    }
+
   }
+
+  # ---------------------------------------------------------------------------
+  # UNKNOWN log_type — drop so nothing unintended reaches Elasticsearch
+  # ---------------------------------------------------------------------------
+  else {
+    drop { }
+  }
+
 }
+
+# =============================================================================
+# OUTPUT — single block, index driven by [@metadata][target_index]
+# [@metadata] is ephemeral and never stored in Elasticsearch
+# =============================================================================
 
 output {
   elasticsearch {
     hosts => ["elasticsearch:9200"]
-    index => "syslog-%{+YYYY.MM.dd}"
+    index => "%{[@metadata][target_index]}"
   }
+  # Uncomment to debug in Logstash container logs:
+  # stdout { codec => rubydebug }
 }
 ```
 
@@ -420,7 +412,14 @@ cat <<'EOF' > /var/log/myapp/app.log
 {"timestamp":"2024-01-25T10:15:32Z","level":"WARN","service":"db-service","message":"Slow query detected","trace_id":"ghi-789","response_time":2350,"status_code":200}
 {"timestamp":"2024-01-25T10:15:33Z","level":"INFO","service":"payment-service","message":"Payment processed","trace_id":"jkl-012","response_time":120,"status_code":200}
 EOF
+
+echo "$(date '+%b %d %H:%M:%S') ip-172-31-44-10 sshd[12345]: Failed password for invalid user hacker from 192.168.1.100 port 54321 ssh2" | sudo tee -a /var/log/auth.log
+
+echo '1.2.3.4 - - [25/May/2026:09:56:00 +0000] "GET /api/v1/data HTTP/1.1" 200 4523 "-" "Mozilla/5.0"' | sudo tee -a /var/log/nginx/access.log
+
 ```
+
+ 
 
 ---
 
@@ -460,11 +459,15 @@ curl -X GET "http://localhost:9600/_node/stats/pipelines?pretty"
 
 ## Step 5 — Explore in Kibana
 
-1. Open `http://<EC2_IP>:5601`
-2. Go to **Stack Management → Index Patterns**
-3. Create index patterns: `nginx-access-*`, `app-logs-*`, `syslog-*`
-4. Go to **Discover** and select your index pattern
-5. Try these KQL queries in Discover:
+1. Access KibanaOpen your web browser.Enter your EC2 instance URL: http://<EC2_IP>:5601
+(replace <EC2_IP> with your actual AWS EC2 public IP address).Log in using your Kibana credentials if prompted.
+2. Navigate to Index PatternsClick the Burger Menu icon (three horizontal lines) in the top-left corner.Scroll down to the bottom section.Click on Management (or Stack Management).In the left sidebar, under the Kibana section, click on Data Views.
+3. Create the Index Patterns You need to repeat these sub-steps for each of your three log sources:
+For Nginx Access Logs:Click the Create data view button.In the Name field, type exactly: nginx-access, Index Pattern: nginx-access-*, Select @timestamp from the Timestamp field dropdown menu.Click Create index pattern. 
+For Application Logs:Click Create data view again.In the Name field, type exactly: app-logs, Index Pattern: app-logs-*, Select @timestamp from the Timestamp field dropdown menu.Click Create index pattern.
+For System Logs:Click Create data view a final time.In the Name field, type exactly: syslog, Index Pattern: syslog-*, Select @timestamp from the Timestamp field dropdown menu.Click Create index pattern.
+3. Access the Discover Tab. Click the Burger Menu icon in the top-left corner again.Click on Discover (usually located near the top under the Analytics section).Look at the top-left section of the Discover page, just below the search bar.Click the dropdown menu showing the current index pattern and switch to the one you want to investigate (e.g., nginx-access-*).
+4. Test KQL QueriesType these example Kibana Query Language (KQL) queries into the top search bar to filter your data.
 
 ```kql
 # All server errors

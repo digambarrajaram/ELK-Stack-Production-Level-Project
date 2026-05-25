@@ -245,15 +245,19 @@ logging.root.appenders: [default, file]
 
 **`configs/logstash.yml`**
 ```yaml
-http.host: "0.0.0.0"
-http.port: 9600
+# Logstash 8.x — api.http.* keys replace the 7.x http.host / http.port
+api.http.host: "0.0.0.0"
+api.http.port: 9600
 
-# Pipeline settings
+# Logging (set to info once stable; debug is noisy)
+log.level: info
+
+# Pipeline settings (also set per-pipeline in pipelines.yml, but useful as defaults)
 pipeline.workers: 2
 pipeline.batch.size: 125
 pipeline.batch.delay: 50
 
-# X-Pack monitoring (reports to ES)
+# X-Pack monitoring (push metrics to Elasticsearch — disabled here, use Stack Monitoring in Kibana instead)
 xpack.monitoring.enabled: false
 ```
 
@@ -292,6 +296,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2g
 
   logstash:
     image: docker.elastic.co/logstash/logstash:8.11.0
@@ -310,11 +318,22 @@ services:
       elasticsearch:
         condition: service_healthy
     environment:
-      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+      # FIX 1: Increased from 512m to 1g — geoip + useragent + grok filters
+      # need headroom; 512m caused the arraycopy JVM crash and connection resets.
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
+    deploy:
+      resources:
+        limits:
+          # FIX 2: Was "1 g" (with a space) — Docker couldn't parse this correctly.
+          # Must be "1500m" or "1.5g" with no space. Set to 1500m to give the
+          # 1g JVM heap room for off-heap (network buffers, metaspace, etc.).
+          memory: 1500m
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.0
     container_name: kibana
+    user: root
+    command: kibana --allow-root
     volumes:
       - ./configs/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
     ports:
@@ -324,6 +343,12 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+    environment:
+      - NODE_OPTIONS="--max-old-space-size=512"
+    deploy:
+      resources:
+        limits:
+          memory: 800m
 
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.11.0
@@ -331,14 +356,19 @@ services:
     user: root
     volumes:
       - ./phase-2-log-ingestion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-      - /var/log:/var/log:ro              # System logs
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro  # Docker logs
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - filebeat-data:/usr/share/filebeat/data
     networks:
       - elk-net
     depends_on:
       - logstash
     command: filebeat -e -strict.perms=false
+    deploy:
+      resources:
+        limits:
+          memory: 250m
+
 
 volumes:
   es-data:
