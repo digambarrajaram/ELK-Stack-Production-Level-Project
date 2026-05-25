@@ -12,8 +12,8 @@ filebeat.inputs:
     id: app-json-logs
     enabled: true
     paths:
-      - /var/log/app/*.log
-      - /var/log/app/**/*.log
+      - /var/log/myapp/*.log
+      - /var/log/myapp/**/*.log
     fields:
       log_type: "app_json"
     fields_under_root: true
