@@ -280,9 +280,6 @@ ILM automates the index lifecycle: **hot → warm → cold → delete**.
             "priority": 0
           },
           "readonly": {}
-          // Note: freeze action removed — not supported in ES 8.x/9.x
-          // For cold-tier archival, configure searchable_snapshot instead
-          // if you have a snapshot repository set up.
         }
       },
       "delete": {
@@ -305,16 +302,14 @@ ILM automates the index lifecycle: **hot → warm → cold → delete**.
 curl -X PUT "https://localhost:9200/_ilm/policy/elk-logs-policy" \
   -u elastic:${ELASTIC_PASSWORD} \
   -H 'Content-Type: application/json' \
-  --cacert security/certs/elasticsearch.crt \
+  --cacert security/certs/elastic-stack-ca.pem \
   -d @ilm/policy.json
 
-# Create a composable index template that applies this ILM policy automatically
-# NOTE: Always use /_index_template/ (composable). The old /_template/ API
-# was removed in ES 9.0.
+# Create composable index template
 curl -X PUT "https://localhost:9200/_index_template/elk-logs-template" \
   -u elastic:${ELASTIC_PASSWORD} \
   -H 'Content-Type: application/json' \
-  --cacert security/certs/elasticsearch.crt \
+  --cacert security/certs/elastic-stack-ca.pem \
   -d '{
     "index_patterns": ["nginx-access-*", "app-logs-*", "syslog-*"],
     "template": {
@@ -330,12 +325,12 @@ curl -X PUT "https://localhost:9200/_index_template/elk-logs-template" \
 # Verify the policy was created
 curl -X GET "https://localhost:9200/_ilm/policy/elk-logs-policy?pretty" \
   -u elastic:${ELASTIC_PASSWORD} \
-  --cacert security/certs/elasticsearch.crt
+  --cacert security/certs/elastic-stack-ca.pem
 
-# Check ILM status for existing indices
+# Check ILM status (will be empty until indices exist — that's normal)
 curl -X GET "https://localhost:9200/nginx-access-*/_ilm/explain?pretty" \
   -u elastic:${ELASTIC_PASSWORD} \
-  --cacert security/certs/elasticsearch.crt
+  --cacert security/certs/elastic-stack-ca.pem
 ```
 
 ---
