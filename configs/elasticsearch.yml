@@ -1,20 +1,27 @@
 cluster.name: elk-production
 node.name: elk-node-1
 
-# Network
 network.host: 0.0.0.0
 http.port: 9200
 
-# Discovery (single-node for this project)
-discovery.type: single-node
+# discovery.type must NOT be set to single-node in ES 9.x
+# (the setting was removed; single-node behaviour is auto-detected)
+# For ES 8.x only, you may keep: discovery.type: single-node
 
-# Memory lock (prevents swapping)
-bootstrap.memory_lock: true
+# ── Security (enabled by default in 8.x/9.x — config only) ────────────────
+xpack.security.enabled: true                  # explicit but redundant on 8+/9+
+xpack.security.enrollment.enabled: false      # true only if using Kibana token enrollment
 
-# Security — disable for Phase 1, enable in Phase 5
-xpack.security.enabled: false
-xpack.security.enrollment.enabled: false
+# TLS for HTTP layer (REST API)
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: certs/elastic-certificates.p12
 
-# Paths
+# TLS for transport layer (node-to-node communication)
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: certs/elastic-certificates.p12
+
 path.data: /usr/share/elasticsearch/data
 path.logs: /usr/share/elasticsearch/logs
