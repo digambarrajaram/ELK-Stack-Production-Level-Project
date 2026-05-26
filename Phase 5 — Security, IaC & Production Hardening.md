@@ -1,8 +1,10 @@
 # Phase 5 — Security, IaC & Production Hardening
 
-> **Goal:** Harden the ELK stack with X-Pack TLS encryption, RBAC, Index Lifecycle Management (ILM), and finalize the Terraform IaC for a fully reproducible production deployment.  
-> **Time estimate:** 4–5 hours  
-> **What you'll learn:** X-Pack security, TLS certificate generation, Elasticsearch RBAC, ILM policies, Terraform modules, production readiness
+**Goal:** Harden the ELK stack with TLS encryption, RBAC, Index Lifecycle Management (ILM), and finalize the Terraform IaC for a fully reproducible production deployment.
+
+**Time estimate:** 4–5 hours
+
+**What you'll learn:** Elasticsearch built-in security, TLS certificate generation, RBAC, ILM policies, Terraform modules, production readiness
 
 ---
 
@@ -11,10 +13,10 @@
 ```
 Before Phase 5 (insecure):                After Phase 5 (hardened):
 ─────────────────────────                 ────────────────────────────
-Elasticsearch: no auth      ──►           Elasticsearch: TLS + RBAC
+Elasticsearch: no TLS/auth  ──►           Elasticsearch: TLS + RBAC
 Kibana: no auth             ──►           Kibana: SSO via ES native realm
 Logstash → ES: plaintext    ──►           Logstash → ES: TLS + API key
-No data retention policy    ──►           ILM: hot→warm→delete cycle
+No data retention policy    ──►           ILM: hot→warm→cold→delete cycle
 Manual EC2 setup            ──►           Full Terraform IaC
 ```
 
@@ -29,25 +31,15 @@ Elasticsearch ships with `elasticsearch-certutil` to generate self-signed certs.
 docker exec -it elasticsearch bash
 
 # 1. Generate CA (Certificate Authority)
-elasticsearch-certutil ca \
-  --out /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 \
-  --pass ""
+elasticsearch-certutil ca --out /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 --pass ""
 
 # 2. Generate node certificate signed by the CA
-elasticsearch-certutil cert \
-  --ca /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 \
-  --ca-pass "" \
-  --out /usr/share/elasticsearch/config/certs/elastic-certificates.p12 \
-  --pass ""
+elasticsearch-certutil cert --ca /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 --ca-pass ""  --out /usr/share/elasticsearch/config/certs/elastic-certificates.p12 --pass ""
 
 # 3. Export PEM format (needed by Logstash and Filebeat)
-openssl pkcs12 -in /usr/share/elasticsearch/config/certs/elastic-certificates.p12 \
-  -clcerts -nokeys -out /usr/share/elasticsearch/config/certs/elasticsearch.crt \
-  -passin pass:""
+openssl pkcs12 -in /usr/share/elasticsearch/config/certs/elastic-certificates.p12 -clcerts -nokeys -out /usr/share/elasticsearch/config/certs/elasticsearch.crt -passin pass:""
 
-openssl pkcs12 -in /usr/share/elasticsearch/config/certs/elastic-certificates.p12 \
-  -nocerts -nodes -out /usr/share/elasticsearch/config/certs/elasticsearch.key \
-  -passin pass:""
+openssl pkcs12 -in /usr/share/elasticsearch/config/certs/elastic-certificates.p12 -nocerts -nodes -out /usr/share/elasticsearch/config/certs/elasticsearch.key  -passin pass:""
 
 # Exit the container
 exit
@@ -58,7 +50,9 @@ docker cp elasticsearch:/usr/share/elasticsearch/config/certs ./security/certs
 
 ---
 
-## Step 2 — Enable X-Pack Security
+## Step 2 — Configure TLS & Security Settings
+
+>Security (authentication + transport TLS) is **on by default**. You do not need to enable it — this step configures the HTTP TLS layer and customises settings for your Docker deployment.
 
 ### 2.1 Update `configs/elasticsearch.yml`
 
@@ -68,11 +62,14 @@ node.name: elk-node-1
 
 network.host: 0.0.0.0
 http.port: 9200
-discovery.type: single-node
 
-# ── X-Pack Security ────────────────────────────────
-xpack.security.enabled: true
-xpack.security.enrollment.enabled: true
+# discovery.type must NOT be set to single-node in ES 9.x
+# (the setting was removed; single-node behaviour is auto-detected)
+# For ES 8.x only, you may keep: discovery.type: single-node
+
+# ── Security (enabled by default in 8.x/9.x — config only) ────────────────
+xpack.security.enabled: true                  # explicit but redundant on 8+/9+
+xpack.security.enrollment.enabled: false      # true only if using Kibana token enrollment
 
 # TLS for HTTP layer (REST API)
 xpack.security.http.ssl.enabled: true
@@ -89,25 +86,26 @@ path.data: /usr/share/elasticsearch/data
 path.logs: /usr/share/elasticsearch/logs
 ```
 
-### 2.2 Set the `elastic` superuser password
+### 2.2 Reset Built-in User Passwords
 
 ```bash
-# Start ES with security enabled
+# Start ES with TLS configured
 docker compose up -d elasticsearch
 
-# Set passwords interactively
-docker exec -it elasticsearch elasticsearch-setup-passwords interactive
+# Reset the elastic superuser password (auto-generates and prints it)
+docker exec -it elasticsearch elasticsearch-reset-password -u elastic
 
-# Or auto-generate (save the output!)
-docker exec -it elasticsearch elasticsearch-setup-passwords auto
+# Or set it interactively (prompts you to type a password)
+docker exec -it elasticsearch elasticsearch-reset-password -u elastic -i
 
-# Output will include:
-# PASSWORD elastic = xxxxxxxxxxxxxxxxxxxxxxxx
-# PASSWORD kibana_system = xxxxxxxxxxxxxxxxxxxxxxxx
-# PASSWORD logstash_system = xxxxxxxxxxxxxxxxxxxxxxxx
+# Reset kibana_system password
+docker exec -it elasticsearch elasticsearch-reset-password -u kibana_system -i
+
+# Reset logstash_system password
+docker exec -it elasticsearch elasticsearch-reset-password -u logstash_system -i
 ```
 
-> ⚠️ **Save these passwords securely.** Store them in `.env` file (never commit).
+> ⚠️ Save these passwords securely. Store them in `.env` (never commit this file).
 
 ```bash
 # .env
@@ -122,7 +120,8 @@ LOGSTASH_SYSTEM_PASSWORD=your_logstash_system_password
 
 Define least-privilege roles for different consumers.
 
-**`security/roles.yml`**
+### `security/roles.yml`
+
 ```yaml
 # Read-only role for dashboard viewers
 elk_viewer:
@@ -172,7 +171,8 @@ elastalert_reader:
         - view_index_metadata
 ```
 
-Create roles and users via API:
+### Create Roles and Users via API
+
 ```bash
 # Create the logstash_writer role
 curl -X POST "https://localhost:9200/_security/role/logstash_writer" \
@@ -232,9 +232,12 @@ curl -X POST "https://localhost:9200/_security/api_key" \
 
 ## Step 4 — Index Lifecycle Management (ILM)
 
-ILM automates the index lifecycle: hot → warm → delete. This is directly analogous to your Commvault retention policies.
+ILM automates the index lifecycle: **hot → warm → cold → delete**.
 
-**`ilm/policy.json`**
+> For cold-tier cost savings, use `searchable_snapshot` (requires a snapshot repository) or rely on `set_priority: 0` + `readonly`.
+
+### `ilm/policy.json`
+
 ```json
 {
   "policy": {
@@ -272,7 +275,10 @@ ILM automates the index lifecycle: hot → warm → delete. This is directly ana
           "set_priority": {
             "priority": 0
           },
-          "freeze": {}
+          "readonly": {}
+          // Note: freeze action removed — not supported in ES 8.x/9.x
+          // For cold-tier archival, configure searchable_snapshot instead
+          // if you have a snapshot repository set up.
         }
       },
       "delete": {
@@ -288,7 +294,8 @@ ILM automates the index lifecycle: hot → warm → delete. This is directly ana
 }
 ```
 
-Apply the ILM policy:
+### Apply the ILM Policy
+
 ```bash
 # Create the ILM policy
 curl -X PUT "https://localhost:9200/_ilm/policy/elk-logs-policy" \
@@ -297,7 +304,9 @@ curl -X PUT "https://localhost:9200/_ilm/policy/elk-logs-policy" \
   --cacert security/certs/elasticsearch.crt \
   -d @ilm/policy.json
 
-# Create an index template that applies this ILM policy automatically
+# Create a composable index template that applies this ILM policy automatically
+# NOTE: Always use /_index_template/ (composable). The old /_template/ API
+# was removed in ES 9.0.
 curl -X PUT "https://localhost:9200/_index_template/elk-logs-template" \
   -u elastic:${ELASTIC_PASSWORD} \
   -H 'Content-Type: application/json' \
@@ -331,13 +340,15 @@ curl -X GET "https://localhost:9200/nginx-access-*/_ilm/explain?pretty" \
 
 Complete production Terraform with remote state, proper networking, and security hardening.
 
-**`terraform/main.tf`** (updated for production):
+
+### `terraform/main.tf`
+
 ```hcl
 terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"   # Updated from 5.x — latest as of 2025/2026
     }
   }
 
@@ -437,8 +448,8 @@ resource "aws_iam_role" "elk_ec2_role" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
     }]
   })
@@ -456,24 +467,24 @@ resource "aws_iam_instance_profile" "elk_profile" {
 
 # EC2 Instance
 resource "aws_instance" "elk_server" {
-  ami                         = var.ami_id
-  instance_type               = var.instance_type
-  key_name                    = var.key_name
-  subnet_id                   = aws_subnet.elk_public_subnet.id
-  vpc_security_group_ids      = [aws_security_group.elk_sg.id]
-  iam_instance_profile        = aws_iam_instance_profile.elk_profile.name
+  ami                    = var.ami_id
+  instance_type          = var.instance_type
+  key_name               = var.key_name
+  subnet_id              = aws_subnet.elk_public_subnet.id
+  vpc_security_group_ids = [aws_security_group.elk_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.elk_profile.name
 
-  # IMDSv2 enforced (security best practice)
+  # IMDSv2 enforced (security best practice — required by AWS Security Hub)
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                 = "required"   # enforces IMDSv2
     http_put_response_hop_limit = 1
   }
 
   root_block_device {
     volume_size           = 30
     volume_type           = "gp3"
-    encrypted             = true  # EBS encryption
+    encrypted             = true   # EBS encryption at rest
     delete_on_termination = true
   }
 
@@ -489,21 +500,38 @@ resource "aws_instance" "elk_server" {
 }
 ```
 
-**`terraform/variables.tf`** (updated):
+### `terraform/variables.tf`
+
 ```hcl
 variable "aws_region"    { default = "us-east-1" }
 variable "instance_type" { default = "t3.medium" }
 variable "key_name"      { type = string }
-variable "my_ip_cidr"    { type = string; description = "Your IP in CIDR — e.g. 1.2.3.4/32" }
-variable "ami_id"        { default = "ami-0c02fb55956c7d316" }  # Ubuntu 22.04 us-east-1
+variable "my_ip_cidr"    {
+  type        = string
+  description = "Your IP in CIDR notation — e.g. 1.2.3.4/32"
+}
+variable "ami_id" {
+  default     = "ami-0c02fb55956c7d316"  # Ubuntu 22.04 us-east-1 — verify latest before use
+  description = "AMI ID — check AWS console for the latest Ubuntu 22.04/24.04 LTS in your region"
+}
 variable "project_repo"  { type = string; default = "" }
 ```
+
+> ⚠️ **AMI note:** The AMI ID `ami-0c02fb55956c7d316` was valid for Ubuntu 22.04 LTS in `us-east-1` at time of writing. AMI IDs change with patch releases. Always verify the current ID via the [AWS console](https://console.aws.amazon.com/ec2/v2/home#Images) or with:
+> ```bash
+> aws ec2 describe-images \
+>   --owners 099720109477 \
+>   --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
+>   --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+>   --output text
+> ```
 
 ---
 
 ## Step 6 — Security Hardening Script
 
-**`security/setup-tls.sh`**
+### `security/setup-tls.sh`
+
 ```bash
 #!/bin/bash
 # Run this inside the Elasticsearch container to set up TLS
@@ -546,14 +574,15 @@ echo "==> TLS setup complete. Certs in $CERT_DIR"
 ## ✅ Phase 5 Checklist
 
 - [ ] TLS certificates generated and mounted into Elasticsearch container
-- [ ] `xpack.security.enabled: true` in `elasticsearch.yml`
-- [ ] `elastic` superuser password set and saved in `.env`
+- [ ] `elasticsearch.yml` updated with TLS config (security is on by default in ES 8+/9+)
+- [ ] `elastic` superuser password reset with `elasticsearch-reset-password` (not the deprecated `setup-passwords`)
 - [ ] `logstash_writer` role and user created
 - [ ] `elk_viewer` role and user created
 - [ ] API key generated for Logstash → ES authentication
-- [ ] ILM policy `elk-logs-policy` created (hot→warm→cold→delete)
-- [ ] Index template applying ILM to all log indices
+- [ ] ILM policy `elk-logs-policy` created (hot→warm→cold→delete) — **no `freeze` action**
+- [ ] Composable index template (`/_index_template/`) applying ILM to all log indices — **not the legacy `/_template/` API**
 - [ ] Terraform uses remote S3 backend with DynamoDB state locking
+- [ ] AWS provider version set to `~> 6.0`
 - [ ] EC2 uses IMDSv2 (`http_tokens = "required"`)
 - [ ] EBS volume encrypted
 - [ ] SSH restricted to your IP only in Security Group
@@ -563,39 +592,34 @@ echo "==> TLS setup complete. Certs in $CERT_DIR"
 
 ## 🧠 Concepts You Learned in Phase 5
 
-- **X-Pack Security** is Elastic's security layer — authentication, authorization, TLS, audit logging. Enabled by default from ES 8.x.
-- **ILM (Index Lifecycle Management)** automatically transitions indices through hot → warm → cold → delete phases. Analogous to Commvault retention policies — data is retained for a defined period then automatically pruned.
-- **RBAC** (Role-Based Access Control) limits what each user/service can do in ES — principle of least privilege. Logstash only gets write permissions to its own indices; it can't query or delete.
-- **API keys** are preferred over username/password for service-to-service auth — they're rotatable, auditable, and can be scoped to specific indices.
-- **IMDSv2** (`http_tokens = required`) prevents SSRF attacks from accessing the EC2 metadata service — a real AWS production hardening requirement.
-- **Remote Terraform state** (S3 + DynamoDB locking) prevents two engineers from running `terraform apply` simultaneously and corrupting state — essential in team environments.
+**Built-in Security (formerly X-Pack)** is Elastic's security layer — authentication, authorisation, TLS, audit logging. Enabled by default from ES 8.0. "X-Pack" as a separate product no longer exists; all security features are bundled and on by default.
+
+**ILM (Index Lifecycle Management)** automatically transitions indices through hot → warm → cold → delete phases. Analogous to Commvault retention policies — data is retained for a defined period then automatically pruned. The `freeze` action was removed in 8.0/9.0; cold-phase data reduction is now done via `searchable_snapshot` or `readonly`.
+
+**RBAC (Role-Based Access Control)** limits what each user/service can do in ES — principle of least privilege. Logstash only gets write permissions to its own indices; it can't query or delete.
+
+**API keys** are preferred over username/password for service-to-service auth — they're rotatable, auditable, and can be scoped to specific indices.
+
+**IMDSv2** (`http_tokens = required`) prevents SSRF attacks from accessing the EC2 metadata service — a real AWS production hardening requirement enforced by AWS Security Hub.
+
+**Remote Terraform state** (S3 + DynamoDB locking) prevents two engineers from running `terraform apply` simultaneously and corrupting state — essential in team environments.
+
+**Composable index templates** (`_index_template` API) replaced the legacy `_template` API, which was fully removed in ES 9.0.
 
 ---
 
 ## 🎯 Project Complete — What You've Built
 
 | Capability | Tool | Production Equivalent |
-|-----------|------|----------------------|
+|---|---|---|
 | Log collection | Filebeat | Beats agents on every server |
 | Log parsing | Logstash Grok | Logstash / Kafka + Logstash |
 | Storage + search | Elasticsearch | ES cluster (3+ nodes) |
-| Visualization | Kibana dashboards | Same |
+| Visualisation | Kibana dashboards | Same |
 | Alerting | ElastAlert2 | ElastAlert2 / PagerDuty integration |
 | Data retention | ILM policies | ILM + snapshots to S3 |
-| Security | X-Pack TLS + RBAC | X-Pack + SSO/LDAP integration |
+| Security | Built-in TLS + RBAC | Built-in + SSO/LDAP integration |
 | IaC | Terraform | Terraform + Ansible (config) |
 
 ---
 
-## 📋 Interview Talking Points — Final Summary
-
-1. *"I built a production ELK stack from scratch on AWS EC2, provisioned with Terraform and containerized with Docker Compose."*
-2. *"I wrote Logstash multi-pipeline configurations with Grok filters to parse Nginx, application JSON, and syslog data into structured fields."*
-3. *"I built Kibana dashboards tracking HTTP error rates, response time P95/P99, geographic traffic distribution, and SSH security events."*
-4. *"I implemented ElastAlert2 with spike detection and frequency rules — achieving under 1-minute MTTD for production anomalies."*
-5. *"I hardened the cluster with X-Pack TLS encryption between all components, RBAC with least-privilege roles, and ILM policies that automatically archive and delete data — similar to retention policies I managed with Commvault at Protean."*
-6. *"The entire infrastructure is reproducible — Terraform provisions the EC2 instance and security groups, everything else deploys with a single `docker compose up`."*
-
----
-
-*⭐ If this project helped you land a role, please star the repo!*
