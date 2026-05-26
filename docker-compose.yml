@@ -114,8 +114,8 @@ services:
       - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
     command: >
       sh -c "
-      elastalert-create-index --host elasticsearch --port 9200 &&
-      elastalert --config /opt/elastalert/config.yml --verbose
+      elastalert-create-index --config /opt/elastalert/config.yml &&
+      elastalert --config /opt/elastalert/config.yml
       "
     environment:
       - TZ=Asia/Kolkata
