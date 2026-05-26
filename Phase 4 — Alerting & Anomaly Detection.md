@@ -287,7 +287,7 @@ buffer_time:
   minutes: 5
 
 metric_agg_key: response_time_ms
-metric_agg_type: percentile
+metric_agg_type: percentiles
 percentile_range: 95
 
 max_threshold: 2000
@@ -295,6 +295,7 @@ max_threshold: 2000
 # Avoid noise
 min_doc_count: 10
 
+realert:
   minutes: 10
 
 alert:
