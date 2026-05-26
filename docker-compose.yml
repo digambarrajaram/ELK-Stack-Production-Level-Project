@@ -119,8 +119,10 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-
+    networks:
+      - elk-net 
     restart: unless-stopped
+    
 volumes:
   es-data:
     driver: local
