@@ -17,6 +17,9 @@ services:
     volumes:
       - es-data:/usr/share/elasticsearch/data
       - ./configs/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      # Phase 5: Security
+      - ./security/certs:/usr/share/elasticsearch/config/certs
+
     ports:
       - "9200:9200"
       - "9300:9300"
