@@ -112,7 +112,11 @@ services:
       - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
       - ./phase-4-alerting/elastalert2/data:/opt/elastalert/data
       - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
-
+    command: >
+      sh -c "
+      elastalert-create-index --host elasticsearch --port 9200 &&
+      elastalert --config /opt/elastalert/config.yml
+      "
     environment:
       - TZ=Asia/Kolkata
 
@@ -122,7 +126,7 @@ services:
     networks:
       - elk-net 
     restart: unless-stopped
-    
+
 volumes:
   es-data:
     driver: local
