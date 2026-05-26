@@ -11,6 +11,7 @@ filter:
       _size:
         gte: 1000000000   # adjust based on your data
 
+realert:
   hours: 4
 
 alert:

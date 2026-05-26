@@ -20,6 +20,7 @@ query_key: service_name
 threshold_cur: 5
 threshold_ref: 2
 
+realert:
   hours: 2
 
 alert:

@@ -15,6 +15,7 @@ max_threshold: 2000
 # Avoid noise
 min_doc_count: 10
 
+realert:
   minutes: 10
 
 alert:

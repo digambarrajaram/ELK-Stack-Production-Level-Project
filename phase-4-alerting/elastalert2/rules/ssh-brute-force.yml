@@ -17,6 +17,7 @@ filter:
       query_string:
         query: "Failed password"
 
+realert:
   minutes: 30
 
 alert:
