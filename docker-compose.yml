@@ -100,7 +100,27 @@ services:
         limits:
           memory: 250m
 
+  elastalert:
+    image: jertel/elastalert2:latest
+    container_name: elastalert2
 
+    env_file:
+      - .env
+
+    volumes:
+      - ./phase-4-alerting/elastalert2/config.yml:/opt/elastalert/config.yml:ro
+      - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
+      - ./phase-4-alerting/elastalert2/data:/opt/elastalert/data
+      - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
+
+    environment:
+      - TZ=Asia/Kolkata
+
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+    restart: unless-stopped
 volumes:
   es-data:
     driver: local

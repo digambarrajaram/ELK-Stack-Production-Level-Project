@@ -1,0 +1,34 @@
+name: High Response Time P95
+type: metric_aggregation
+
+index: app-logs-*
+
+buffer_time:
+  minutes: 5
+
+metric_agg_key: response_time_ms
+metric_agg_type: percentile
+percentile_range: 95
+
+max_threshold: 2000
+
+# Avoid noise
+min_doc_count: 10
+
+  minutes: 10
+
+alert:
+  - email
+
+email:
+  - ${ALERT_TO}
+
+
+alert_text: |
+  🐢 Slow Response Time Detected
+
+  P95: {0} ms
+  Threshold: 2000 ms
+
+alert_text_args:
+  - metric_agg_value

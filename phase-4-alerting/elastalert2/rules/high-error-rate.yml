@@ -1,0 +1,19 @@
+name: High HTTP Error Rate
+type: frequency
+
+index: nginx-access-*
+
+num_events: 10
+timeframe:
+  minutes: 5
+
+filter:
+  - range:
+      http_status_code:
+        gte: 500
+
+alert:
+  - email
+
+email:
+  - ${ALERT_TO}

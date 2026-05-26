@@ -1,0 +1,43 @@
+# -------------------------------
+# Elasticsearch
+# -------------------------------
+es_host: elasticsearch
+es_port: 9200
+
+# -------------------------------
+# ElastAlert Behavior
+# -------------------------------
+run_every:
+  minutes: 1
+
+buffer_time:
+  minutes: 15
+
+writeback_index: elastalert_status
+writeback_alias: elastalert
+
+alert_time_limit:
+  days: 2
+
+use_local_time: true
+timezone: Asia/Kolkata
+
+rules_folder: /opt/elastalert/rules
+
+logging_level: INFO
+
+# -------------------------------
+# Gmail SMTP
+# -------------------------------
+smtp_host: ${SMTP_HOST}
+smtp_port: ${SMTP_PORT}
+smtp_auth_file: /opt/elastalert/smtp_auth.yaml
+
+from_addr: ${ALERT_FROM}
+email_reply_to: ${ALERT_FROM}
+
+smtp_starttls: true
+smtp_ssl: false
+
+# 🔐 Security (IMPORTANT)
+verify_certs: true

@@ -1,9 +1,8 @@
 # Phase 4 — Alerting & Anomaly Detection
 
-> **Goal:** Set up ElastAlert2 with real alert rules — spike detection, brute-force detection, error-rate threshold alerts — all wired to Slack notifications. Then add Elasticsearch Watcher for metric-based alerting.  
+> **Goal:** Set up ElastAlert2 with real alert rules — spike detection, brute-force detection, error-rate threshold alerts — all wired to email notifications (Gmail SMTP). Then add Elasticsearch Watcher for metric-based alerting.  
 > **Time estimate:** 3–4 hours  
-> **What you'll learn:** ElastAlert2 rule types, Watcher queries, Slack webhook integration, alert tuning, MTTD concepts
-
+> **What you'll learn:** ElastAlert2 rule types, Watcher queries, SMTP/Gmail integration, alert tuning, MTTD concepts
 ---
 
 ## 📐 Alerting Architecture
@@ -29,18 +28,27 @@ Elasticsearch Indices
 Add this service to your `docker-compose.yml`:
 
 ```yaml
-  elastalert:
-    image: jertel/elastalert2:latest
-    container_name: elastalert2
-    volumes:
-      - ./phase-4-alerting/elastalert2/config.yml:/opt/elastalert/config.yml:ro
-      - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
-    networks:
-      - elk-net
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    restart: unless-stopped
+elastalert:
+  image: jertel/elastalert2:latest
+  container_name: elastalert2
+
+  env_file:
+    - .env
+
+  volumes:
+    - ./phase-4-alerting/elastalert2/config.yml:/opt/elastalert/config.yml:ro
+    - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
+    - ./phase-4-alerting/elastalert2/data:/opt/elastalert/data
+    - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
+
+  environment:
+    - TZ=Asia/Kolkata
+
+  depends_on:
+    elasticsearch:
+      condition: service_healthy
+
+  restart: unless-stopped
 ```
 
 ---
@@ -49,49 +57,79 @@ Add this service to your `docker-compose.yml`:
 
 **`elastalert2/config.yml`**
 ```yaml
-# Elasticsearch connection
+# -------------------------------
+# Elasticsearch
+# -------------------------------
 es_host: elasticsearch
 es_port: 9200
 
-# How often ElastAlert2 queries ES (in minutes)
+# -------------------------------
+# ElastAlert Behavior
+# -------------------------------
 run_every:
   minutes: 1
 
-# How far back to look on startup (in case EA was down)
 buffer_time:
   minutes: 15
 
-# Index to store ElastAlert2 metadata
 writeback_index: elastalert_status
+writeback_alias: elastalert
 
-# Alert on connection errors
-alert_on_error: true
+alert_time_limit:
+  days: 2
 
-# Timezone
-use_local_time: false
+use_local_time: true
+timezone: Asia/Kolkata
 
-# Rules directory
 rules_folder: /opt/elastalert/rules
 
-# Logging
 logging_level: INFO
+
+# -------------------------------
+# Gmail SMTP
+# -------------------------------
+smtp_host: ${SMTP_HOST}
+smtp_port: ${SMTP_PORT}
+smtp_auth_file: /opt/elastalert/smtp_auth.yaml
+
+from_addr: ${ALERT_FROM}
+email_reply_to: ${ALERT_FROM}
+
+smtp_starttls: true
+smtp_ssl: false
+
+# 🔐 Security (IMPORTANT)
+verify_certs: true
 ```
 
 ---
 
-## Step 3 — Slack Webhook Setup
+## Step 3 — Gmail SMTP Setup (replace Slack)
 
-1. Go to your Slack workspace → **Apps → Incoming Webhooks → Add New Webhook**
-2. Choose a channel (e.g., `#alerts`)
-3. Copy the Webhook URL: `https://hooks.slack.com/services/T.../B.../xxx`
+We configure ElastAlert2 to send email alerts via a Gmail (or Google Workspace) SMTP account. Using Gmail typically requires an App Password for accounts with 2FA enabled.
+
+1. Create an App Password in your Google Account (or use a service account SMTP user).
+2. Store credentials in environment variables and an `smtp_auth.yaml` file (already mounted by the Docker Compose example above).
 
 Create a `.env` file (do NOT commit to GitHub):
 ```bash
 # .env
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your-account@gmail.com
+SMTP_PASS=your-app-password
+ALERT_FROM=alerts@your-domain.com      # or your-account@gmail.com
+ALERT_TO=oncall@example.com
 ```
 
-Add `.env` to `.gitignore`:
+Create `elastalert2/smtp_auth.yaml` (mounted into the container at `/opt/elastalert/smtp_auth.yaml`) with credentials in YAML format:
+```yaml
+# smtp_auth.yaml (keep this file private)
+user: "${SMTP_USER}"
+password: "${SMTP_PASS}"
+```
+
+Add `.env` to `.gitignore` if not already excluded:
 ```bash
 echo ".env" >> .gitignore
 ```
@@ -109,55 +147,22 @@ Triggers when 5xx errors exceed 10 in a 5-minute window.
 name: High HTTP Error Rate
 type: frequency
 
-# Index to query
 index: nginx-access-*
 
-# Trigger when this many events match in the time window
 num_events: 10
 timeframe:
   minutes: 5
 
-# Filter — only look at 5xx errors
 filter:
   - range:
       http_status_code:
         gte: 500
 
-# Group alerts by status code (separate alert per code)
-query_key: http_status_code
-
-# Realert cooldown (don't spam the same alert)
-realert:
-  minutes: 15
-
-# Slack notification
 alert:
-  - slack
+  - email
 
-slack_webhook_url: "YOUR_SLACK_WEBHOOK_URL"
-
-slack_msg_color: danger
-
-alert_text: |
-  🚨 *High HTTP Error Rate Detected*
-
-  *Index:* nginx-access-*
-  *Status Code:* {0}
-  *Error Count:* {1} errors in last 5 minutes
-  *Threshold:* 10 errors
-
-  <http://YOUR_EC2_IP:5601/app/discover#/|View in Kibana>
-
-alert_text_args:
-  - http_status_code
-  - num_hits
-
-# Include these fields in the alert body
-include:
-  - http_status_code
-  - url_path
-  - client_ip
-  - "@timestamp"
+email:
+  - ${ALERT_TO}
 ```
 
 ---
@@ -168,55 +173,48 @@ Triggers when the same IP has 5+ failed SSH logins in 10 minutes.
 
 **`elastalert2/rules/ssh-brute-force.yml`**
 ```yaml
-name: SSH Brute Force Attempt
+name: SSH Brute Force Detection
 type: frequency
 
-index: syslog-*
+index: auth-logs-*
 
+# Trigger if 5 failed attempts
 num_events: 5
+
 timeframe:
   minutes: 10
 
-filter:
-  - term:
-      security_event: "ssh_failed_login"
-
-# Group by source IP — alert when ONE IP triggers threshold
+# Group by attacker IP
 query_key: ssh_source_ip
 
-realert:
-  hours: 1
+filter:
+  - query:
+      query_string:
+        query: "Failed password"
+
+  minutes: 30
 
 alert:
-  - slack
+  - email
 
-slack_webhook_url: "YOUR_SLACK_WEBHOOK_URL"
+email:
+  - ${ALERT_TO}
 
-slack_msg_color: danger
 
 alert_subject: "🔒 SSH Brute Force from {0}"
+
 alert_subject_args:
   - ssh_source_ip
 
 alert_text: |
-  🔒 *SSH Brute Force Attack Detected*
+  SSH brute force detected.
 
-  *Source IP:* {0}
-  *Failed Attempts:* {1} in last 10 minutes
-  *Target User(s):* Multiple
-  *Recommended Action:* Block IP in Security Group
-
-  Run to block: `aws ec2 authorize-security-group-ingress --revoke ...`
+  IP: {0}
+  Attempts: {1}
 
 alert_text_args:
   - ssh_source_ip
   - num_hits
-
-include:
-  - ssh_source_ip
-  - ssh_failed_user
-  - "@timestamp"
-  - syslog_host
 ```
 
 ---
@@ -232,47 +230,38 @@ type: spike
 
 index: app-logs-*
 
-# Trigger when current window is 3x the baseline
 spike_height: 3
 spike_type: up
 
-# Current window vs baseline window
 timeframe:
   hours: 1
 
-# Only count ERROR/FATAL events
 filter:
   - terms:
       log_level:
         - ERROR
         - FATAL
 
-# Group by service
 query_key: service_name
 
-# Minimum events before spiking (avoids alert on 0→1)
 threshold_cur: 5
 threshold_ref: 2
 
-realert:
   hours: 2
 
 alert:
-  - slack
+  - email
 
-slack_webhook_url: "YOUR_SLACK_WEBHOOK_URL"
-
-slack_msg_color: warning
+email:
+  - ${ALERT_TO}
 
 alert_text: |
-  ⚠️ *Application Error Spike Detected*
+  ⚠️ Application Error Spike Detected
 
-  *Service:* {0}
-  *Current Error Count:* {1}
-  *Baseline (previous hour):* {2}
-  *Spike Factor:* {3}x
-
-  <http://YOUR_EC2_IP:5601/app/discover#/?_g=(time:(from:now-1h,to:now))&_a=(query:(language:kql,query:'log_level:ERROR'))|View Errors in Kibana>
+  Service: {0}
+  Current Count: {1}
+  Baseline: {2}
+  Spike: {3}x
 
 alert_text_args:
   - service_name
@@ -294,36 +283,32 @@ type: metric_aggregation
 
 index: app-logs-*
 
-# Run every minute
 buffer_time:
   minutes: 5
 
-# Use 95th percentile of response_time_ms
 metric_agg_key: response_time_ms
 metric_agg_type: percentile
 percentile_range: 95
 
-# Trigger when P95 > 2000ms
 max_threshold: 2000
 
-realert:
+# Avoid noise
+min_doc_count: 10
+
   minutes: 10
 
 alert:
-  - slack
+  - email
 
-slack_webhook_url: "YOUR_SLACK_WEBHOOK_URL"
+email:
+  - ${ALERT_TO}
 
-slack_msg_color: warning
 
 alert_text: |
-  🐢 *Slow Response Time Detected*
+  🐢 Slow Response Time Detected
 
-  *P95 Response Time:* {0}ms
-  *Threshold:* 2000ms
-  *Time Window:* Last 5 minutes
-
-  Services experiencing slowness may need investigation.
+  P95: {0} ms
+  Threshold: 2000 ms
 
 alert_text_args:
   - metric_agg_value
@@ -340,36 +325,30 @@ Triggers when Elasticsearch indices exceed 15GB total.
 name: High Index Storage Usage
 type: any
 
-# Query ES cluster stats endpoint via HTTP
-# We check this via a custom ES query on a system index
-
-index: .monitoring-es-*
+index: _all
 
 timeframe:
   minutes: 10
 
 filter:
   - range:
-      indices.store.size_in_bytes:
-        gte: 16106127360  # 15 GB in bytes
+      _size:
+        gte: 1000000000   # adjust based on your data
 
-realert:
   hours: 4
 
 alert:
-  - slack
+  - email
 
-slack_webhook_url: "YOUR_SLACK_WEBHOOK_URL"
+email:
+  - ${ALERT_TO}
 
-slack_msg_color: warning
 
 alert_text: |
-  💾 *Elasticsearch Storage Warning*
+  💾 Elasticsearch Storage Warning
 
-  Index storage is approaching limits.
-  Consider running ILM rollover or deleting old indices.
-
-  <http://YOUR_EC2_IP:5601/app/management/data/index_lifecycle_management|View ILM Policies>
+  Storage usage is increasing.
+  Consider cleanup or ILM policies.
 ```
 
 ---
@@ -446,16 +425,14 @@ Watcher is Kibana's built-in alerting. Shown here as reference for enterprise en
     }
   },
   "actions": {
-    "notify_slack": {
-      "webhook": {
-        "scheme": "https",
-        "host": "hooks.slack.com",
-        "port": 443,
-        "method": "post",
-        "path": "/services/YOUR/SLACK/WEBHOOK",
-        "params": {},
-        "headers": { "Content-Type": "application/json" },
-        "body": "{\"text\": \"🚨 High error rate: {{ctx.payload.aggregations.error_count.value}} errors in last 5 minutes\"}"
+    "notify_email": {
+      "email": {
+        "to": ["${ALERT_TO}"],
+        "subject": "🚨 High error rate detected",
+        "priority": "high",
+        "body": {
+          "text": "High error rate: {{ctx.payload.aggregations.error_count.value}} errors in last 5 minutes"
+        }
       }
     }
   }
@@ -474,10 +451,10 @@ curl -X PUT "http://localhost:9200/_watcher/watch/error-spike-watch" \
 ## ✅ Phase 4 Checklist
 
 - [ ] ElastAlert2 container running (`docker compose ps` shows `elastalert2 Up`)
-- [ ] Slack webhook URL configured (not committed to GitHub)
+- [ ] SMTP / Gmail credentials configured (not committed to GitHub)
 - [ ] All 5 alert rules created in `rules/` directory
-- [ ] High error rate alert tested and Slack message received
-- [ ] SSH brute-force alert tested and Slack message received
+- [ ] High error rate alert tested and email received
+- [ ] SSH brute-force alert tested and email received
 - [ ] `elastalert_status` index exists in Elasticsearch
 - [ ] `.env` added to `.gitignore`
 

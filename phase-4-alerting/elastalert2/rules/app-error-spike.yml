@@ -1,0 +1,43 @@
+name: Application Error Spike
+type: spike
+
+index: app-logs-*
+
+spike_height: 3
+spike_type: up
+
+timeframe:
+  hours: 1
+
+filter:
+  - terms:
+      log_level:
+        - ERROR
+        - FATAL
+
+query_key: service_name
+
+threshold_cur: 5
+threshold_ref: 2
+
+  hours: 2
+
+alert:
+  - email
+
+email:
+  - ${ALERT_TO}
+
+alert_text: |
+  ⚠️ Application Error Spike Detected
+
+  Service: {0}
+  Current Count: {1}
+  Baseline: {2}
+  Spike: {3}x
+
+alert_text_args:
+  - service_name
+  - spike_count
+  - reference_count
+  - spike_height

@@ -1,0 +1,27 @@
+name: High Index Storage Usage
+type: any
+
+index: _all
+
+timeframe:
+  minutes: 10
+
+filter:
+  - range:
+      _size:
+        gte: 1000000000   # adjust based on your data
+
+  hours: 4
+
+alert:
+  - email
+
+email:
+  - ${ALERT_TO}
+
+
+alert_text: |
+  💾 Elasticsearch Storage Warning
+
+  Storage usage is increasing.
+  Consider cleanup or ILM policies.

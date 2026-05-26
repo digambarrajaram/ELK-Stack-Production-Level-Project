@@ -1,0 +1,46 @@
+{
+  "trigger": {
+    "schedule": {
+      "interval": "5m"
+    }
+  },
+  "input": {
+    "search": {
+      "request": {
+        "indices": ["nginx-access-*"],
+        "body": {
+          "query": {
+            "bool": {
+              "filter": [
+                { "range": { "@timestamp": { "gte": "now-5m" } } },
+                { "range": { "http_status_code": { "gte": 500 } } }
+              ]
+            }
+          },
+          "aggs": {
+            "error_count": { "value_count": { "field": "http_status_code" } }
+          }
+        }
+      }
+    }
+  },
+  "condition": {
+    "compare": {
+      "ctx.payload.aggregations.error_count.value": {
+        "gt": 10
+      }
+    }
+  },
+  "actions": {
+    "notify_email": {
+      "email": {
+        "to": ["${ALERT_TO}"],
+        "subject": "🚨 High error rate detected",
+        "priority": "high",
+        "body": {
+          "text": "High error rate: {{ctx.payload.aggregations.error_count.value}} errors in last 5 minutes"
+        }
+      }
+    }
+  }
+}

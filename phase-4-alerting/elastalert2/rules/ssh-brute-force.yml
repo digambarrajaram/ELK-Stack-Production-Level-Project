@@ -1,0 +1,42 @@
+name: SSH Brute Force Detection
+type: frequency
+
+index: auth-logs-*
+
+# Trigger if 5 failed attempts
+num_events: 5
+
+timeframe:
+  minutes: 10
+
+# Group by attacker IP
+query_key: ssh_source_ip
+
+filter:
+  - query:
+      query_string:
+        query: "Failed password"
+
+  minutes: 30
+
+alert:
+  - email
+
+email:
+  - ${ALERT_TO}
+
+
+alert_subject: "🔒 SSH Brute Force from {0}"
+
+alert_subject_args:
+  - ssh_source_ip
+
+alert_text: |
+  SSH brute force detected.
+
+  IP: {0}
+  Attempts: {1}
+
+alert_text_args:
+  - ssh_source_ip
+  - num_hits
