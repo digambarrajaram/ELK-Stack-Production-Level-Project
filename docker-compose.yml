@@ -26,7 +26,7 @@ services:
     networks:
       - elk-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -s https://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      test: ["CMD-SHELL", "curl -sk https://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
       interval: 30s
       timeout: 10s
       retries: 5
