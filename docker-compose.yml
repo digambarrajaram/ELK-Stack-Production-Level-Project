@@ -119,17 +119,19 @@ services:
     environment:
       - TZ=Asia/Kolkata
     volumes:
-      - ./phase-4-alerting/elastalert2/config.yml:/opt/elastalert/config.yaml:ro
+      - ./phase-4-alerting/elastalert2/config.yml:/opt/elastalert/config.yaml.tpl:ro
       - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
       - ./phase-4-alerting/elastalert2/data:/opt/elastalert/data
       - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
+    command: >
+      sh -c "envsubst < /opt/elastalert/config.yaml.tpl > /opt/elastalert/config.yaml
+      && elastalert --config /opt/elastalert/config.yaml"
     depends_on:
       elasticsearch:
         condition: service_healthy
     networks:
       - elk-net
     restart: unless-stopped
-
 volumes:
   es-data:
     driver: local
