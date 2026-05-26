@@ -5,11 +5,13 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     container_name: elasticsearch
+    env_file: .env
     environment:
       - discovery.type=single-node
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
       - xpack.security.enabled=true
       - xpack.security.enrollment.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
     ulimits:
       memlock:
         soft: -1
@@ -17,16 +19,15 @@ services:
     volumes:
       - es-data:/usr/share/elasticsearch/data
       - ./configs/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
-      # Phase 5: Security
       - ./security/certs:/usr/share/elasticsearch/config/certs
-
     ports:
       - "9200:9200"
       - "9300:9300"
     networks:
       - elk-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sk https://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      # -u reads ELASTIC_PASSWORD from the container env (injected above)
+      test: ["CMD-SHELL", "curl -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health | grep -q 'status'"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -38,30 +39,26 @@ services:
   logstash:
     image: docker.elastic.co/logstash/logstash:8.11.0
     container_name: logstash
+    env_file: .env                          # gives pipeline.conf access to ${LOGSTASH_SYSTEM_PASSWORD} etc.
+    environment:
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
     volumes:
       - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
-      # Phase 2: Log ingestion pipelines (uncomment after Phase 2 setup)
       - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
+      - ./security/certs:/usr/share/logstash/config/certs:ro
     ports:
-      - "5044:5044"    # Beats input (used in Phase 2)
-      - "5000:5000"    # TCP input
-      - "9600:9600"    # Logstash monitoring API
+      - "5044:5044"
+      - "5000:5000"
+      - "9600:9600"
     networks:
       - elk-net
     depends_on:
       elasticsearch:
         condition: service_healthy
-    environment:
-      # FIX 1: Increased from 512m to 1g — geoip + useragent + grok filters
-      # need headroom; 512m caused the arraycopy JVM crash and connection resets.
-      - LS_JAVA_OPTS=-Xms1g -Xmx1g
     deploy:
       resources:
         limits:
-          # FIX 2: Was "1 g" (with a space) — Docker couldn't parse this correctly.
-          # Must be "1500m" or "1.5g" with no space. Set to 1500m to give the
-          # 1g JVM heap room for off-heap (network buffers, metaspace, etc.).
           memory: 1500m
 
   kibana:
@@ -69,8 +66,19 @@ services:
     container_name: kibana
     user: root
     command: kibana --allow-root
+    env_file: .env
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=512
+      # These ELASTICSEARCH_* vars are natively recognised by Kibana 8.x
+      # and override anything set in kibana.yml — no yml password needed
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASSWORD}
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/elastic-stack-ca.p12
+      - ELASTICSEARCH_SSL_VERIFICATIONMODE=certificate
     volumes:
       - ./configs/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - ./security/certs:/usr/share/kibana/config/certs:ro
     ports:
       - "5601:5601"
     networks:
@@ -78,8 +86,6 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    environment:
-      - NODE_OPTIONS="--max-old-space-size=512"
     deploy:
       resources:
         limits:
@@ -89,11 +95,13 @@ services:
     image: docker.elastic.co/beats/filebeat:8.11.0
     container_name: filebeat
     user: root
+    env_file: .env
     volumes:
       - ./phase-2-log-ingestion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - filebeat-data:/usr/share/filebeat/data
+      - ./security/certs:/usr/share/filebeat/config/certs:ro
     networks:
       - elk-net
     depends_on:
@@ -107,23 +115,19 @@ services:
   elastalert:
     image: jertel/elastalert2:latest
     container_name: elastalert2
-
-    env_file:
-      - .env
-
+    env_file: .env
+    environment:
+      - TZ=Asia/Kolkata
     volumes:
       - ./phase-4-alerting/elastalert2/config.yml:/opt/elastalert/config.yaml:ro
       - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
       - ./phase-4-alerting/elastalert2/data:/opt/elastalert/data
       - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
-    environment:
-      - TZ=Asia/Kolkata
-
     depends_on:
       elasticsearch:
         condition: service_healthy
     networks:
-      - elk-net 
+      - elk-net
     restart: unless-stopped
 
 volumes:

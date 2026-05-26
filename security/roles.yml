@@ -1,0 +1,46 @@
+# Read-only role for dashboard viewers
+elk_viewer:
+  cluster:
+    - monitor
+  indices:
+    - names:
+        - "nginx-access-*"
+        - "app-logs-*"
+        - "syslog-*"
+      privileges:
+        - read
+        - view_index_metadata
+
+# Logstash write role — only write to log indices
+logstash_writer:
+  cluster:
+    - manage_index_templates
+    - monitor
+    - manage_ilm
+  indices:
+    - names:
+        - "nginx-access-*"
+        - "app-logs-*"
+        - "syslog-*"
+      privileges:
+        - write
+        - create
+        - create_index
+        - manage
+        - manage_ilm
+
+# ElastAlert read role
+elastalert_reader:
+  cluster:
+    - monitor
+  indices:
+    - names:
+        - "nginx-access-*"
+        - "app-logs-*"
+        - "syslog-*"
+        - "elastalert_status"
+      privileges:
+        - read
+        - write
+        - create_index
+        - view_index_metadata

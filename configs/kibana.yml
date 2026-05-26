@@ -2,10 +2,6 @@ server.host: "0.0.0.0"
 server.port: 5601
 server.name: "elk-kibana"
 
-# Point to Elasticsearch
-elasticsearch.hosts: ["http://elasticsearch:9200"]
-
-# Logging
 logging.appenders.file.type: file
 logging.appenders.file.fileName: /var/log/kibana/kibana.log
 logging.appenders.file.layout.type: json
