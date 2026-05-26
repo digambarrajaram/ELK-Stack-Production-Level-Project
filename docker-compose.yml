@@ -115,7 +115,7 @@ services:
     command: >
       sh -c "
       elastalert-create-index --host elasticsearch --port 9200 &&
-      elastalert --config /opt/elastalert/config.yml
+      elastalert --config /opt/elastalert/config.yml --verbose
       "
     environment:
       - TZ=Asia/Kolkata
