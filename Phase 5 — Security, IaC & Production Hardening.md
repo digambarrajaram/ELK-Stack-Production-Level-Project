@@ -27,25 +27,29 @@ Manual EC2 setup            ──►           Full Terraform IaC
 Elasticsearch ships with `elasticsearch-certutil` to generate self-signed certs.
 
 ```bash
-# Step into the Elasticsearch container
-docker exec -it elasticsearch bash
+#Step 1 — Generate CA (output to /tmp inside container): Use below cmd as it is without adding your own password
 
-# 1. Generate CA (Certificate Authority).
-elasticsearch-certutil ca --out /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 --pass ""
+docker exec -it elasticsearch elasticsearch-certutil ca --out /tmp/elastic-stack-ca.p12 --pass ""
 
-# 2. Generate node certificate signed by the CA
-elasticsearch-certutil cert --ca /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 --ca-pass ""  --out /usr/share/elasticsearch/config/certs/elastic-certificates.p12 --pass ""
+#Step 2 — Generate cert:
 
-# 3. Export PEM format (needed by Logstash and Filebeat)
-openssl pkcs12 -in /usr/share/elasticsearch/config/certs/elastic-certificates.p12 -clcerts -nokeys -out /usr/share/elasticsearch/config/certs/elasticsearch.crt -passin pass:""
+docker exec -it elasticsearch elasticsearch-certutil cert --ca /tmp/elastic-stack-ca.p12 --ca-pass "" --out /tmp/elastic-certificates.p12 --pass ""
 
-openssl pkcs12 -in /usr/share/elasticsearch/config/certs/elastic-certificates.p12 -nocerts -nodes -out /usr/share/elasticsearch/config/certs/elasticsearch.key  -passin pass:""
+#Step 3 — Copy files out to your host:
 
-# Exit the container
-exit
+docker cp elasticsearch:/tmp/elastic-stack-ca.p12 ./security/certs/elastic-stack-ca.p12
 
-# Copy certs to host
-docker cp elasticsearch:/usr/share/elasticsearch/config/certs ./security/certs
+docker cp elasticsearch:/tmp/elastic-certificates.p12 ./security/certs/elastic-certificates.p12
+
+#Step 4 — Fix ownership so the elasticsearch user (UID 1000) can read them:
+sudo chown 1000:0 ./security/certs/elastic-stack-ca.p12 ./security/certs/elastic-certificates.p12
+
+sudo chmod 640 ./security/certs/elastic-stack-ca.p12 ./security/certs/elastic-certificates.p12
+
+#Step 5 — Restart:
+docker compose down && docker compose up
+
+#Since both certs are now generated with empty passwords (--pass ""), Elasticsearch won't need any keystore password entries and should boot cleanly.
 ```
 
 ---
