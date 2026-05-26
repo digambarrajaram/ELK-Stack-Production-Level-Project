@@ -30,7 +30,7 @@ Elasticsearch ships with `elasticsearch-certutil` to generate self-signed certs.
 # Step into the Elasticsearch container
 docker exec -it elasticsearch bash
 
-# 1. Generate CA (Certificate Authority)
+# 1. Generate CA (Certificate Authority).
 elasticsearch-certutil ca --out /usr/share/elasticsearch/config/certs/elastic-stack-ca.p12 --pass ""
 
 # 2. Generate node certificate signed by the CA
