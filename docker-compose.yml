@@ -114,8 +114,8 @@ services:
       - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
     command: >
       sh -c "
-      elastalert-create-index --config /opt/elastalert/config.yml &&
-      elastalert --config /opt/elastalert/config.yml
+      elastalert-create-index --config /opt/elastalert/config.yaml &&
+      elastalert --config /opt/elastalert/config.yaml
       "
     environment:
       - TZ=Asia/Kolkata
