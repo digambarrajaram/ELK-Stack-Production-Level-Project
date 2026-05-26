@@ -457,17 +457,140 @@ curl -X GET "http://localhost:9600/_node/stats/pipelines?pretty"
 
 ---
 
-## Step 5 — Explore in Kibana
+## Step 5 — Verify Log Ingestion
 
-1. Access KibanaOpen your web browser.Enter your EC2 instance URL: http://<EC2_IP>:5601
-(replace <EC2_IP> with your actual AWS EC2 public IP address).Log in using your Kibana credentials if prompted.
-2. Navigate to Index PatternsClick the Burger Menu icon (three horizontal lines) in the top-left corner.Scroll down to the bottom section.Click on Management (or Stack Management).In the left sidebar, under the Kibana section, click on Data Views.
-3. Create the Index Patterns You need to repeat these sub-steps for each of your three log sources:
-For Nginx Access Logs:Click the Create data view button.In the Name field, type exactly: nginx-access, Index Pattern: nginx-access-*, Select @timestamp from the Timestamp field dropdown menu.Click Create index pattern. 
-For Application Logs:Click Create data view again.In the Name field, type exactly: app-logs, Index Pattern: app-logs-*, Select @timestamp from the Timestamp field dropdown menu.Click Create index pattern.
-For System Logs:Click Create data view a final time.In the Name field, type exactly: syslog, Index Pattern: syslog-*, Select @timestamp from the Timestamp field dropdown menu.Click Create index pattern.
-3. Access the Discover Tab. Click the Burger Menu icon in the top-left corner again.Click on Discover (usually located near the top under the Analytics section).Look at the top-left section of the Discover page, just below the search bar.Click the dropdown menu showing the current index pattern and switch to the one you want to investigate (e.g., nginx-access-*).
-4. Test KQL QueriesType these example Kibana Query Language (KQL) queries into the top search bar to filter your data.
+### 1. Check Filebeat is Running
+```bash
+docker ps | grep filebeat
+docker logs filebeat --tail 20
+
+# Look for lines like:
+# INFO log/harvester.go:315 Harvester started for file: /var/log/nginx/access.log
+```
+
+### 2. Verify Elasticsearch Indices Created
+```bash
+# List all indices
+curl -X GET "http://localhost:9200/_cat/indices?v"
+
+# Expected output:
+# health status index                     uuid                   pri rep docs.count docs.deleted store.size pri.store.size
+# yellow open   nginx-access-2024.05.26  abc123...              1   1       10       0      15kb      15kb
+# yellow open   app-logs-2024.05.26      def456...              1   1       15       0      25kb      25kb
+# yellow open   syslog-2024.05.26        ghi789...              1   1       20       0      35kb      35kb
+```
+
+### 3. Count Documents by Index
+```bash
+curl -X GET "http://localhost:9200/nginx-access-*/_count?pretty"
+curl -X GET "http://localhost:9200/app-logs-*/_count?pretty"
+curl -X GET "http://localhost:9200/syslog-*/_count?pretty"
+```
+
+### 4. Verify Field Parsing
+```bash
+# Check Nginx parsing
+curl -X GET "http://localhost:9200/nginx-access-*/_search?pretty&size=1" \
+  -H 'Content-Type: application/json'
+
+# Check App logs parsing
+curl -X GET "http://localhost:9200/app-logs-*/_search?pretty&size=1" \
+  -H 'Content-Type: application/json'
+
+# Check Syslog parsing
+curl -X GET "http://localhost:9200/syslog-*/_search?pretty&size=1" \
+  -H 'Content-Type: application/json'
+```
+
+### 5. Search for Specific Events
+
+**Find all 5xx errors:**
+```bash
+curl -X GET "http://localhost:9200/nginx-access-*/_search?pretty" \
+  -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "range": {
+      "http_status_code": { "gte": 500 }
+    }
+  },
+  "size": 10
+}'
+```
+
+**Find failed SSH attempts:**
+```bash
+curl -X GET "http://localhost:9200/syslog-*/_search?pretty" \
+  -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "term": { "security_event": "ssh_failed_login" }
+  },
+  "size": 10
+}'
+```
+
+**Find slow requests (>1000ms):**
+```bash
+curl -X GET "http://localhost:9200/app-logs-*/_search?pretty" \
+  -H 'Content-Type: application/json' -d'
+{
+  "query": {
+    "range": {
+      "response_time_ms": { "gte": 1000 }
+    }
+  },
+  "size": 10
+}'
+```
+
+---
+
+## Step 6 — Explore in Kibana
+
+### 1. Access Kibana Discover
+1. Open your browser: `http://<EC2_IP>:5601`
+2. Click **Analytics** (left sidebar)
+3. Click **Discover**
+
+### 2. Create Data Views (Index Patterns)
+
+First-time setup: create data views for each index.
+
+1. Click the **Data Views** dropdown (top-left of Discover)
+2. Click **Create data view**
+3. Name: `nginx-access`
+   - Index pattern: `nginx-access-*`
+   - Timestamp: `@timestamp`
+   - Click **Save**
+
+Repeat for:
+- **app-logs**: `app-logs-*` with `@timestamp`
+- **syslog**: `syslog-*` with `@timestamp`
+
+### 3. Explore Each Index
+
+**Nginx Access Logs:**
+```bash
+# In Discover, select 'nginx-access' data view
+# Visible fields: client_ip, http_status_code, url_path, status_category, geoip, ua
+```
+
+**Application Logs:**
+```bash
+# In Discover, select 'app-logs' data view
+# Visible fields: log_level, service_name, response_time_ms, trace_id, error_message
+```
+
+**Syslog:**
+```bash
+# In Discover, select 'syslog' data view
+# Visible fields: syslog_program, syslog_message, ssh_source_ip, security_event
+```
+
+### 4. Test KQL Queries
+
+In the Discover search bar, type these queries:
 
 ```kql
 # All server errors
@@ -483,7 +606,78 @@ tags: "ssh_failed_login"
 service_name: "auth-service" AND log_level: "ERROR"
 
 # Requests from a specific country
-geoip.country_name: "China"
+geoip.country_name: "India"
+
+# SSH success events
+security_event: "ssh_success"
+
+# Out-of-memory events
+system_event: "oom_kill"
+
+# Disk full events
+system_event: "disk_full"
+```
+
+---
+
+## Step 7 — Check Logstash Pipeline Metrics
+
+```bash
+# View pipeline statistics
+curl -X GET "http://localhost:9600/_node/stats/pipelines?pretty"
+
+# Expected output shows:
+# - events.in: total events received
+# - events.out: total events sent to output
+# - events.filtered: events after filters
+# - events.duration_in_millis: processing time
+```
+
+---
+
+## Troubleshooting Phase 2
+
+### Issue: "No matching data found" in Kibana
+
+**Solution:**
+```bash
+# 1. Verify indices exist
+curl -X GET "http://localhost:9200/_cat/indices?v"
+
+# 2. Check document count
+curl -X GET "http://localhost:9200/nginx-access-*/_count"
+
+# 3. Verify time range — select "Last 1 year" in Kibana
+# (default may filter out older data)
+
+# 4. Check Filebeat logs
+docker logs filebeat --tail 50
+```
+
+### Issue: Fields not parsing correctly
+
+**Solution:**
+```bash
+# Check Logstash logs for filter errors
+docker logs logstash --tail 100 | grep -i error
+
+# View raw document to see what was ingested
+curl -X GET "http://localhost:9200/nginx-access-*/_search?pretty&size=1" \
+  -H 'Content-Type: application/json'
+```
+
+### Issue: Filebeat not sending logs
+
+**Solution:**
+```bash
+# 1. Check Filebeat can read log files
+docker exec filebeat cat /var/log/nginx/access.log | head -5
+
+# 2. Verify Logstash is listening on port 5044
+docker logs logstash | grep "Started listening"
+
+# 3. Restart Filebeat
+docker compose restart filebeat
 ```
 
 ---
@@ -491,11 +685,62 @@ geoip.country_name: "China"
 ## ✅ Phase 2 Checklist
 
 - [ ] Filebeat is running and shipping logs (check `docker logs filebeat`)
-- [ ] Three indices appear in `_cat/indices`: nginx, app-logs, syslog
+- [ ] Three indices appear in `_cat/indices`: nginx-access-*, app-logs-*, syslog-*
 - [ ] Nginx logs are parsed — `client_ip`, `http_status_code`, `url_path` fields visible
 - [ ] App logs are parsed — `log_level`, `service_name`, `response_time_ms` fields visible
-- [ ] SSH failed login events are tagged in syslog index
-- [ ] KQL queries return correct results in Kibana Discover
+- [ ] SSH failed login events are tagged (`security_event: "ssh_failed_login"`)
+- [ ] KQL queries return results in Kibana Discover
+- [ ] GeoIP data populated in nginx index
+- [ ] User agent parsing visible in nginx index
+- [ ] Slow request tagging working in app-logs
+- [ ] Logstash pipeline stats show events flowing through
+
+---
+
+## 🧠 Key Concepts Learned in Phase 2
+
+### Filebeat Input Types
+- `type: log` — watches files with line-by-line shipping
+- `fields` — adds metadata to distinguish log sources
+- `fields_under_root` — puts metadata at document root level (not nested)
+- `include_lines` / `exclude_files` — filter which lines/files to capture
+
+### Logstash Grok Patterns
+Grok uses regex patterns in a simpler syntax:
+- `%{IPORHOST:client_ip}` — matches IP or hostname, captures as `client_ip` field
+- `%{HTTPDATE:request_time}` — matches HTTP date format
+- `%{NUMBER:http_status_code:int}` — matches number, converts to integer type
+- `%{GREEDYDATA:message}` — matches anything remaining
+
+### Multi-Pipeline Pattern
+Instead of one monolithic pipeline, split by log type:
+- **Combined.conf:** Routes by `[log_type]` field set in Filebeat
+- Each log type gets its own `if [log_type] == "..."` block
+- Output uses `[@metadata][target_index]` for dynamic index naming
+- **Benefits:** Cleaner, easier to debug, independent scaling per type
+
+### Index Naming Convention
+```
+nginx-access-2024.05.26     ← date-based indices roll daily
+app-logs-2024.05.26
+syslog-2024.05.26
+```
+
+Allows automatic cleanup (delete old indices) and better storage management.
+
+### Enrichment Layers
+1. **Parsing:** Grok extracts fields from raw logs
+2. **Transformation:** Mutate, rename, convert types
+3. **Enrichment:** GeoIP lookups, user agent parsing, tagging
+4. **Routing:** Decide which index receives the document
+
+Each layer adds value for downstream analysis and alerting.
+
+---
+
+## ➡️ Next Step
+
+Proceed to **[Phase 3 — Kibana Dashboards & Visualizations](../phase-3-kibana-dashboards/Phase%203%20—%20Kibana%20Dashboards%20&%20Visualizations.md)**
 
 ---
 

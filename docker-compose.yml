@@ -38,9 +38,10 @@ services:
     volumes:
       - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      # Phase 2: Log ingestion pipelines (uncomment after Phase 2 setup)
       - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
     ports:
-      - "5044:5044"    # Beats input
+      - "5044:5044"    # Beats input (used in Phase 2)
       - "5000:5000"    # TCP input
       - "9600:9600"    # Logstash monitoring API
     networks:
