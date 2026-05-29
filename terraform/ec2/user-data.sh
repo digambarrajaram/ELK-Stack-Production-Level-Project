@@ -1,79 +1,128 @@
+```bash
 #!/bin/bash
 
-# ==============================================================================
-# LOGGING SETUP
-# Redirects all outputs and errors to a central log file for easy debugging.
-# View live progress on the EC2 instance using: tail -f /var/log/user-data.log
-# ==============================================================================
+# Exit immediately if a command exits with non-zero status
+set -euo pipefail
+
+# Logging
+LOG_FILE="/var/log/user-data.log"
+exec > >(tee -a ${LOG_FILE}) 2>&1
+
 echo "======================================================"
 echo "STARTING AUTOMATED ELK STACK CONFIGURATION"
 echo "======================================================"
 
-# ==============================================================================
-# STEP 1: SYSTEM SYSTEM LEVEL ADJUSTMENTS (CRITICAL FOR ELK)
-# Elasticsearch requires higher virtual memory settings to run without crashing.
-# ==============================================================================
-echo "[1/5] Configuring Linux Virtual Memory for Elasticsearch..."
+# ------------------------------------------------------------------------------
+# STEP 1: SYSTEM LEVEL SETTINGS (ELASTICSEARCH REQUIREMENT)
+# ------------------------------------------------------------------------------
+echo "[1/5] Configuring Linux Virtual Memory..."
 sysctl -w vm.max_map_count=262144
-echo "vm.max_map_count=262144" >> /etc/sysctl.conf
 
-# ==============================================================================
-# STEP 2: PREREQUISITE INSTALLATION
-# Install common software properties, curl, and git.
-# ==============================================================================
-echo "[2/5] Updating packages and installing Git..."
+if ! grep -q "vm.max_map_count=262144" /etc/sysctl.conf; then
+  echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+fi
+
+# ------------------------------------------------------------------------------
+# STEP 2: INSTALL PREREQUISITES
+# ------------------------------------------------------------------------------
+echo "[2/5] Installing prerequisites..."
 apt-get update -y
-apt-get install -y git curl apt-transport-https ca-certificates software-properties-common
+apt-get install -y \
+  ca-certificates \
+  curl \
+  gnupg \
+  lsb-release \
+  git
 
-# ==============================================================================
-# STEP 3: INSTALL DOCKER ENGINE & DOCKER COMPOSE
-# Most ELK repositories run via Docker Compose to manage components easily.
-# ==============================================================================
-echo "[3/5] Installing Docker Engine..."
+# ------------------------------------------------------------------------------
+# STEP 3: INSTALL DOCKER (FIXED + PRODUCTION SAFE)
+# ------------------------------------------------------------------------------
+echo "[3/5] Installing Docker..."
+
+# Remove wrong repo if exists
+rm -f /etc/apt/sources.list.d/docker.list
+
+# Add Docker GPG key
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://docker.com | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+fi
+
 chmod a+r /etc/apt/keyrings/docker.gpg
 
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://docker.com $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+# Add correct Docker repo
+ARCH=$(dpkg --print-architecture)
+CODENAME=$(lsb_release -cs)
 
+echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu ${CODENAME} stable" \
+> /etc/apt/sources.list.d/docker.list
+
+# Install Docker
 apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# Start and enable the Docker service daemon
-systemctl start docker
+# Start Docker
 systemctl enable docker
+systemctl start docker
 
-# ==============================================================================
-# STEP 4: CLONE YOUR TARGET REPOSITORY
-# Interpolates the variable passed directly from your Terraform workspace.
-# ==============================================================================
-echo "[4/5] Cloning ELK Stack repository from: ${project_repo}"
+# Add ubuntu user to docker group
+usermod -aG docker ubuntu
+
+# Validate Docker installation
+if ! command -v docker &> /dev/null; then
+  echo "ERROR: Docker installation failed"
+  exit 1
+fi
+
+echo "Docker installed successfully: $(docker --version)"
+
+# ------------------------------------------------------------------------------
+# STEP 4: CLONE REPOSITORY
+# ------------------------------------------------------------------------------
+echo "[4/5] Cloning ELK Stack repository..."
+
 cd /home/ubuntu
-git clone "${project_repo}" elk-stack-app
 
-# Fix directory ownership permissions for the ubuntu system user
+if [ -d "elk-stack-app" ]; then
+  echo "Repo already exists. Pulling latest changes..."
+  cd elk-stack-app
+  git pull
+else
+  git clone "${project_repo}" elk-stack-app
+fi
+
 chown -R ubuntu:ubuntu /home/ubuntu/elk-stack-app
 
-# ==============================================================================
-# STEP 5: AUTOMATICALLY DEPLOY THE APPLICATION
-# Navigates into your repository and fires up your deployment scripts.
-# ==============================================================================
-echo "[5/5] Launching ELK Stack services..."
+# ------------------------------------------------------------------------------
+# STEP 5: DEPLOY ELK STACK
+# ------------------------------------------------------------------------------
+echo "[5/5] Deploying ELK Stack..."
+
 cd /home/ubuntu/elk-stack-app
 
-# Option A: If your repo uses Docker Compose (Recommended)
+# Run as ubuntu user to avoid permission issues
+sudo -u ubuntu bash << 'EOF'
+
+cd /home/ubuntu/elk-stack-app
+
 if [ -f "docker-compose.yml" ] || [ -f "docker-compose.yaml" ]; then
-    echo "Found docker-compose file. Launching containers..."
+    echo "Starting services using Docker Compose..."
     docker compose up -d
-# Option B: Fallback if your repo uses a setup shell script instead
 elif [ -f "setup.sh" ]; then
-    echo "Found setup.sh script. Running custom setup..."
+    echo "Running setup.sh..."
     chmod +x setup.sh
     ./setup.sh
 else
-    echo "WARNING: Neither docker-compose.yml nor setup.sh was found in your repository root."
+    echo "ERROR: No deployment file found!"
+    exit 1
 fi
+
+EOF
 
 echo "======================================================"
 echo "ELK STACK SETUP COMPLETE"
 echo "======================================================"
+```

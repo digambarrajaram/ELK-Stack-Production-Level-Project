@@ -38,7 +38,7 @@ resource "aws_instance" "elk_instance" {
       Project = var.project
     }
 
-    user_data = base64encode(templatefile("${path.module}/user-data.sh", {
+  user_data_base64 = base64encode(templatefile("${path.module}/user-data.sh", {
     project_repo = var.project_repo
   }))
 }
