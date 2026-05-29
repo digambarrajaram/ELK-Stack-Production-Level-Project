@@ -13,10 +13,10 @@ variable "project" {
 variable "public_subnet_cidr_block" { 
     description = "public_subnet_cidr_block"
      }
-variable "private_subnet_cidr_block" { 
-    description = "private_subnet_cidr_block"   
-     }
 
 variable "internet_route" {
     description = "Internet route"
+}
+variable "az" {
+    description = "Availability zone"
 }
