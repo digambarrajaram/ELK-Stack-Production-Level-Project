@@ -36,8 +36,9 @@ ELK_Stack/
 ├── phase-4-alerting/
 │   ├── test-all-alerts.sh
 │   └── elastalert2/
-│       ├── config.yml
-│       ├── smtp_auth.yaml        
+│       ├── config.yaml.tpl         ← Config template (env vars substituted)
+│       ├── config.yml              ← Base config (for reference)
+│       ├── smtp_auth.yaml          ← SMTP credentials template
 │       ├── data/                 (created by docker)
 │       ├── rules/
 │       │   ├── high-error-rate.yml
@@ -120,14 +121,17 @@ echo ".env" >> .gitignore
 
 ## Step 3 — ElastAlert2 Configuration File
 
-**`phase-4-alerting/elastalert2/config.yml`**
-
+**`phase-4-alerting/elastalert2/config.yaml.tpl`**
 ```yaml
 # ========================================
 # ELASTICSEARCH CONNECTION
 # ========================================
 es_host: elasticsearch
 es_port: 9200
+es_username: elastic
+es_password: ${ELASTIC_PASSWORD}
+
+use_ssl: true
 verify_certs: false
 
 # ========================================
@@ -164,8 +168,6 @@ email_reply_to: ${ALERT_FROM}
 smtp_starttls: true
 smtp_ssl: false
 
-# Set to false for self-signed certs
-verify_certs: true
 ```
 
 ---
@@ -236,7 +238,7 @@ Triggers when the same IP has 5+ failed SSH logins in 10 minutes.
 name: SSH Brute Force Detection
 type: frequency
 
-index: auth-logs-*
+index: syslog-*
 
 # Trigger if 5 failed attempts
 num_events: 5

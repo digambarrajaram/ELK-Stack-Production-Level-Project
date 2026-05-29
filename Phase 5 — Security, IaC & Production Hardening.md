@@ -57,15 +57,15 @@ docker exec -it elasticsearch elasticsearch-certutil cert \
 ### 1.4 Copy Certificates to Your Host
 
 ```bash
-docker cp elasticsearch:/tmp/elastic-stack-ca.p12 ./security/certs/elastic-stack-ca.p12
-docker cp elasticsearch:/tmp/elastic-certificates.p12 ./security/certs/elastic-certificates.p12
+docker cp elasticsearch:/tmp/elastic-stack-ca.p12 ./security/elastic-stack-ca.p12
+docker cp elasticsearch:/tmp/elastic-certificates.p12 ./security/elastic-certificates.p12
 ```
 
 ### 1.5 Fix Ownership for Elasticsearch Container User (UID 1000)
 
 ```bash
-sudo chown 1000:0 ./security/certs/elastic-stack-ca.p12 ./security/certs/elastic-certificates.p12
-sudo chmod 640 ./security/certs/elastic-stack-ca.p12 ./security/certs/elastic-certificates.p12
+sudo chown 1000:0 ./security/elastic-stack-ca.p12 ./security/elastic-certificates.p12
+sudo chmod 640 ./security/elastic-stack-ca.p12 ./security/elastic-certificates.p12
 ```
 
 ### 1.6 Extract PEM Files for Other Tools
@@ -74,12 +74,12 @@ ElastAlert and some clients need PEM format (not PKCS12):
 
 ```bash
 # Extract CA certificate to PEM (no password since we generated with --pass "")
-openssl pkcs12 -in ./security/certs/elastic-stack-ca.p12 \
+openssl pkcs12 -in ./security/elastic-stack-ca.p12 \
   -nokeys -passin pass:"" \
-  | openssl x509 -out ./security/certs/elastic-stack-ca.pem
+  | openssl x509 -out ./security/elastic-stack-ca.pem
 
 # Verify it looks correct
-head -2 ./security/certs/elastic-stack-ca.pem
+head -2 ./security/elastic-stack-ca.pem
 # Should show: -----BEGIN CERTIFICATE-----
 ```
 
@@ -92,8 +92,6 @@ sleep 30
 # Should show TLS handshake (no certificate errors)
 curl -vk https://localhost:9200 2>&1 | head -20
 ```
-
----
 
 ---
 
@@ -975,10 +973,6 @@ variable "project_repo"  { type = string; default = "" }
   - [ ] Security Group restricts SSH to your IP only
   - [ ] EC2 instance uses IAM role with SSM access
   - [ ] `terraform apply` plan reviewed before deployment
-
----
-
-## ✅ Post-Deployment Validation
 
 ---
 

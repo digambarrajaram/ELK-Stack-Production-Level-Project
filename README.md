@@ -8,53 +8,64 @@
 ## 🗂️ Project Structure
 
 ```
-elk-stack-project/
+ELK_Stack/
 ├── README.md                     ← You are here
+├── .env.example                  ← Environment variables template
+├── .env                          ← Your actual secrets (not in git)
+├── docker-compose.yml            ← Main service orchestration
+├── elk_setup.sh                  ← Setup script
+├── configs/
+│   ├── elasticsearch.yml         ← ES configuration with TLS
+│   ├── kibana.yml                ← Kibana configuration
+│   ├── logstash.yml              ← Logstash configuration
+│   └── pipelines.yml             ← Logstash pipeline config
 ├── phase-1-infrastructure/
-│   ├── README.md                 ← Setup guide
-│   ├── docker-compose.yml
-│   ├── terraform/
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   └── configs/
-│       ├── elasticsearch.yml
-│       ├── kibana.yml
-│       └── logstash.yml
+│   └── terraform/                ← Empty stubs (use terraform/ instead)
 ├── phase-2-log-ingestion/
-│   ├── README.md
 │   ├── filebeat/
-│   │   └── filebeat.yml
+│   │   └── filebeat.yml          ← Filebeat log collection config
 │   └── logstash/
-│       ├── pipelines/
-│       │   ├── nginx.conf
-│       │   ├── app-logs.conf
-│       │   └── syslog.conf
-│       └── patterns/
-│           └── custom-patterns
+│       └── pipelines/
+│           └── combined.conf     ← Main Logstash pipeline with Grok filters
 ├── phase-3-kibana-dashboards/
-│   ├── README.md
-│   └── dashboards/
-│       ├── infra-health.ndjson
-│       ├── nginx-analytics.ndjson
-│       └── error-rate.ndjson
+│   ├── dashboards/
+│   │   ├── Dashboard_Snapshots/  ← Dashboard screenshot images
+│   │   ├── export.ndjson         ← Exported dashboard objects
+│   │   └── kql-cheatsheet.md     ← KQL query reference
 ├── phase-4-alerting/
-│   ├── README.md
 │   ├── elastalert2/
-│   │   ├── config.yml
-│   │   └── rules/
-│   │       ├── high-error-rate.yml
-│   │       ├── ssh-brute-force.yml
-│   │       └── cpu-spike.yml
-│   └── watcher/
-│       └── error-spike-watcher.json
-└── phase-5-hardening/
-    ├── README.md
-    ├── security/
-    │   ├── setup-tls.sh
-    │   └── roles.yml
-    └── ilm/
-        └── policy.json
+│   │   ├── config.yaml.tpl       ← ElastAlert2 config template (env vars substituted)
+│   │   ├── config.yml            ← ElastAlert2 config (without env substitution)
+│   │   ├── smtp_auth.yaml        ← SMTP credentials
+│   │   ├── rules/
+│   │   │   ├── high-error-rate.yml
+│   │   │   ├── ssh-brute-force.yml
+│   │   │   ├── app-error-spike.yml
+│   │   │   ├── slow-response-time.yml
+│   │   │   └── disk-usage-warning.yml
+│   │   └── watcher/
+│   │       └── error-spike-watcher.json
+│   └── test-all-alerts.sh        ← Test script for alert rules
+├── phase-5-hardening/           ← (not a separate directory, see below)
+├── ilm/
+│   └── policy.json               ← Index Lifecycle Management policy
+├── security/
+│   └── roles.yml                 ← RBAC role definitions
+└── terraform/
+    ├── main.tf                   ← Main Terraform configuration
+    ├── variables.tf              ← Terraform input variables
+    ├── outputs.tf                ← Terraform outputs
+    ├── provider.tf               ← AWS provider configuration
+    ├── remote_backend.tf         ← S3 backend configuration
+    ├── ec2/
+    │   ├── main.tf               ← EC2 instance resources
+    │   ├── output.tf             ← EC2 outputs
+    │   ├── variable.tf           ← EC2 variables
+    │   └── user-data.sh          ← EC2 bootstrap script
+    └── vpc/
+        ├── main.tf               ← VPC resources
+        ├── output.tf             ← VPC outputs
+        └── variable.tf           ← VPC variables
 ```
 
 ---
@@ -92,11 +103,11 @@ elk-stack-project/
 
 | Phase | Topic | Key Skills | Status |
 |-------|-------|-----------|--------|
-| [Phase 1](./phase-1-infrastructure/README.md) | Infrastructure Setup | Docker, Terraform, AWS EC2 | 🟢 Start here |
-| [Phase 2](./phase-2-log-ingestion/README.md) | Log Ingestion Pipelines | Filebeat, Logstash, Grok | 🔵 Core skills |
-| [Phase 3](./phase-3-kibana-dashboards/README.md) | Kibana Dashboards | Lens, TSVB, Maps | 🔵 Portfolio-ready |
-| [Phase 4](./phase-4-alerting/README.md) | Alerting & Detection | ElastAlert2, Watcher | 🟠 Interview gold |
-| [Phase 5](./phase-5-hardening/README.md) | Security & Hardening | X-Pack TLS, ILM, RBAC | 🔴 Production-grade |
+| [Phase 1](./Phase%201%20—%20Infrastructure%20Setup.md) | Infrastructure Setup | Docker, Terraform, AWS EC2 | 🟢 Start here |
+| [Phase 2](./Phase%202%20—%20Log%20Ingestion%20Pipelines.md) | Log Ingestion Pipelines | Filebeat, Logstash, Grok | 🔵 Core skills |
+| [Phase 3](./Phase%203%20—%20Kibana%20Dashboards%20&%20Visualizations.md) | Kibana Dashboards | Lens, TSVB, Maps | 🔵 Portfolio-ready |
+| [Phase 4](./Phase%204%20—%20Alerting%20&%20Anomaly%20Detection.md) | Alerting & Detection | ElastAlert2, Watcher | 🟠 Interview gold |
+| [Phase 5](./Phase%205%20—%20Security,%20IaC%20&%20Production%20Hardening.md) | Security & Hardening | X-Pack TLS, ILM, RBAC | 🔴 Production-grade |
 
 ---
 

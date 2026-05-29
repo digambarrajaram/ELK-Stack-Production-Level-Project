@@ -22,7 +22,7 @@
 
 Filebeat watches log files and ships lines to Logstash.
 
-**`filebeat/filebeat.yml`**
+**`phase-2-log-ingestion/filebeat/filebeat.yml`**
 ```yaml
 # =============================================================================
 # Filebeat — single Logstash output on port 5044

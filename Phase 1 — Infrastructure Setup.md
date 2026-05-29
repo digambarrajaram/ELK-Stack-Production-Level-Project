@@ -18,10 +18,11 @@ AWS EC2 (t3.medium, Ubuntu 22.04)
     │  docker compose up
     ▼
 ┌─────────────────────────────────────┐
-│  Elasticsearch  :9200               │
-│  Kibana         :5601               │
-│  Logstash       :5044 / 9600        │
+│  Elasticsearch  :9200 (TLS enabled)  │
+│  Kibana         :5601 (TLS enabled)  │
+│  Logstash       :5044 / 9600         │
 │  Filebeat       (agent, no port)    │
+│  ElastAlert2    (alert engine)      │
 └─────────────────────────────────────┘
 ```
 
@@ -31,81 +32,54 @@ AWS EC2 (t3.medium, Ubuntu 22.04)
 
 ### 1.1 Create the Terraform files
 
-**`terraform/main.tf`**
+**`terraform/provider.tf`**
 ```hcl
 terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.46.0"
     }
   }
 }
-
 provider "aws" {
   region = var.aws_region
 }
+```
 
-# Security Group — allow SSH, Kibana, ES, Logstash
-resource "aws_security_group" "elk_sg" {
-  name        = "elk-stack-sg"
-  description = "ELK Stack security group"
-
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # Restrict to your IP in production
+**`terraform/main.tf`**
+```hcl
+# Fetch an Ubuntu 22.04 LTS Machine Image automatically
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
   }
-
-  ingress {
-    description = "Kibana"
-    from_port   = 5601
-    to_port     = 5601
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
   }
-
-  ingress {
-    description = "Elasticsearch"
-    from_port   = 9200
-    to_port     = 9200
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "Logstash Beats"
-    from_port   = 5044
-    to_port     = 5044
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name    = "elk-stack-sg"
-    Project = "elk-stack"
-  }
+  owners = ["099720109477"] # Canonical
 }
 
-# EC2 Instance
-resource "aws_instance" "elk_server" {
-  ami                    = "ami-0c02fb55956c7d316"  # Ubuntu 22.04 us-east-1
-  instance_type          = var.instance_type
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.elk_sg.id]
+resource "aws_instance" "elk_instance" {
+    ami = data.aws_ami.ubuntu.id
+    instance_type = var.instance_type
+    key_name = var.key_name
+
+    # IMDSv2 enforced (security best practice — required by AWS Security Hub)
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"   # enforces IMDSv2
+    http_put_response_hop_limit = 1
+  }
 
   root_block_device {
-    volume_size = 30  # GB — ELK needs storage for indices
-    volume_type = "gp3"
+    volume_size           = 30
+    volume_type           = "gp3"
+    encrypted             = true   # EBS encryption at rest
+    delete_on_termination = true
   }
 
   user_data = <<-EOF
@@ -124,49 +98,134 @@ resource "aws_instance" "elk_server" {
     # git clone https://github.com/YOUR_USERNAME/elk-stack-project.git /home/ubuntu/elk-stack
   EOF
 
-  tags = {
-    Name    = "elk-stack-server"
-    Project = "elk-stack"
-  }
+    tags = {
+      Name = var.instance_name
+      Project = var.project
+    }
+}
+
+resource "aws_security_group" "elk_sg" {
+    name = "elk-stack-sg"
+    description = "Security group for elk stack"
+
+    tags = {
+      Name = "elk-stack-sg"
+      Project = var.project
+    }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ssh" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 22
+  to_port = 22
+}
+
+resource "aws_vpc_security_group_ingress_rule" "https" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 443
+  to_port = 443
+}
+resource "aws_vpc_security_group_ingress_rule" "logstash" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 5044
+  to_port = 5044
+}
+resource "aws_vpc_security_group_ingress_rule" "kibana" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 5601
+  to_port = 5601
+}
+
+resource "aws_vpc_security_group_ingress_rule" "web_API_port_Elastic_Logstash" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 9600
+  to_port = 9600
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ElasticSearch" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 9200
+  to_port = 9200
+}
+resource "aws_vpc_security_group_ingress_rule" "http" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4 = var.internet_route
+  ip_protocol = "tcp"
+  from_port = 80
+  to_port = 80
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_all_outbound" {
+  security_group_id = aws_security_group.elk_sg.id
+  cidr_ipv4         = var.internet_route
+  ip_protocol       = "-1" # Semantically represents all protocols
 }
 ```
 
 **`terraform/variables.tf`**
 ```hcl
-variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "us-east-1"
-}
-
 variable "instance_type" {
-  description = "EC2 instance type (t3.medium minimum for ELK)"
   type        = string
   default     = "t3.medium"
+  description = "EC2 instance type"
 }
 
 variable "key_name" {
-  description = "Name of your EC2 key pair"
   type        = string
+  default     = "elk-stack-server_keypair"
+  description = "EC2 key pair"
 }
+
+variable "instance_name" {
+  type        = string
+  default     = "elk-instance"
+  description = "EC2 instance name"
+}
+
+variable "aws_region" {
+  type        = string
+  default     = "ap-south-1"
+  description = "AWS Region"
+}
+
+variable "project" {
+  type        = string
+  default     = "elk-stack"
+  description = "Project name"
+}
+
+variable "internet_route" {
+  default     = "0.0.0.0/0"
+  description = "Internet route"
+}
+
 ```
 
 **`terraform/outputs.tf`**
 ```hcl
-output "elk_server_public_ip" {
-  description = "Public IP of the ELK server"
-  value       = aws_instance.elk_server.public_ip
+output "instance_id" {
+  value = aws_instance.elk_instance.id
+}
+output "public_ip" {
+  value = aws_instance.elk_instance.public_ip
+}
+output "private_ip" {
+  value = aws_instance.elk_instance.private_ip
 }
 
-output "kibana_url" {
-  description = "Kibana dashboard URL"
-  value       = "http://${aws_instance.elk_server.public_ip}:5601"
-}
 
-output "elasticsearch_url" {
-  description = "Elasticsearch API URL"
-  value       = "http://${aws_instance.elk_server.public_ip}:9200"
-}
 ```
 
 ### 1.2 Apply Terraform
@@ -204,21 +263,28 @@ ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_PUBLIC_IP>
 cluster.name: elk-production
 node.name: elk-node-1
 
-# Network
 network.host: 0.0.0.0
 http.port: 9200
 
-# Discovery (single-node for this project)
-discovery.type: single-node
+# discovery.type must NOT be set to single-node in ES 9.x
+# (the setting was removed; single-node behaviour is auto-detected)
+# For ES 8.x only, you may keep: discovery.type: single-node
 
-# Memory lock (prevents swapping)
-bootstrap.memory_lock: true
+# ── Security (enabled by default in 8.x/9.x — config only) ────────────────
+xpack.security.enabled: true                  # explicit but redundant on 8+/9+
+xpack.security.enrollment.enabled: false      # true only if using Kibana token enrollment
 
-# Security — disable for Phase 1, enable in Phase 5
-xpack.security.enabled: false
-xpack.security.enrollment.enabled: false
+# TLS for HTTP layer (REST API)
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: certs/elastic-certificates.p12
 
-# Paths
+# TLS for transport layer (node-to-node communication).
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: certs/elastic-certificates.p12
+
 path.data: /usr/share/elasticsearch/data
 path.logs: /usr/share/elasticsearch/logs
 ```
@@ -274,11 +340,13 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     container_name: elasticsearch
+    env_file: .env
     environment:
       - discovery.type=single-node
       - ES_JAVA_OPTS=-Xms1g -Xmx1g
-      - xpack.security.enabled=false
+      - xpack.security.enabled=true
       - xpack.security.enrollment.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
     ulimits:
       memlock:
         soft: -1
@@ -286,13 +354,15 @@ services:
     volumes:
       - es-data:/usr/share/elasticsearch/data
       - ./configs/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./security/certs:/usr/share/elasticsearch/config/certs
     ports:
       - "9200:9200"
       - "9300:9300"
     networks:
       - elk-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      # -u reads ELASTIC_PASSWORD from the container env (injected above)
+      test: ["CMD-SHELL", "curl -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health | grep -q 'status'"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -304,30 +374,26 @@ services:
   logstash:
     image: docker.elastic.co/logstash/logstash:8.11.0
     container_name: logstash
+    env_file: .env                          # gives pipeline.conf access to ${LOGSTASH_SYSTEM_PASSWORD} etc.
+    environment:
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
     volumes:
       - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
-      # Phase 2: Log ingestion pipelines will be added here
-      # - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
+      - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
+      - ./security/certs:/usr/share/logstash/config/certs:ro
     ports:
-      - "5044:5044"    # Beats input (used in Phase 2)
-      - "5000:5000"    # TCP input
-      - "9600:9600"    # Logstash monitoring API
+      - "5044:5044"
+      - "5000:5000"
+      - "9600:9600"
     networks:
       - elk-net
     depends_on:
       elasticsearch:
         condition: service_healthy
-    environment:
-      # FIX 1: Increased from 512m to 1g — geoip + useragent + grok filters
-      # need headroom; 512m caused the arraycopy JVM crash and connection resets.
-      - LS_JAVA_OPTS=-Xms1g -Xmx1g
     deploy:
       resources:
         limits:
-          # FIX 2: Was "1 g" (with a space) — Docker couldn't parse this correctly.
-          # Must be "1500m" or "1.5g" with no space. Set to 1500m to give the
-          # 1g JVM heap room for off-heap (network buffers, metaspace, etc.).
           memory: 1500m
 
   kibana:
@@ -335,8 +401,19 @@ services:
     container_name: kibana
     user: root
     command: kibana --allow-root
+    env_file: .env
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=512
+      # These ELASTICSEARCH_* vars are natively recognised by Kibana 8.x
+      # and override anything set in kibana.yml — no yml password needed
+      - ELASTICSEARCH_HOSTS=https://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASSWORD}
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=/usr/share/kibana/config/certs/elastic-stack-ca.p12
+      - ELASTICSEARCH_SSL_VERIFICATIONMODE=certificate
     volumes:
       - ./configs/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - ./security/certs:/usr/share/kibana/config/certs:ro
     ports:
       - "5601:5601"
     networks:
@@ -344,8 +421,6 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    environment:
-      - NODE_OPTIONS="--max-old-space-size=512"
     deploy:
       resources:
         limits:
@@ -355,11 +430,13 @@ services:
     image: docker.elastic.co/beats/filebeat:8.11.0
     container_name: filebeat
     user: root
+    env_file: .env
     volumes:
       - ./phase-2-log-ingestion/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - filebeat-data:/usr/share/filebeat/data
+      - ./security/certs:/usr/share/filebeat/config/certs:ro
     networks:
       - elk-net
     depends_on:
@@ -370,6 +447,35 @@ services:
         limits:
           memory: 250m
 
+  elastalert:
+      image: jertel/elastalert2:latest
+      container_name: elastalert2
+      env_file: .env
+      environment:
+        - TZ=Asia/Kolkata
+      volumes:
+        - ./phase-4-alerting/elastalert2/config.yaml.tpl:/opt/elastalert/config.yaml.tpl:ro
+        - ./phase-4-alerting/elastalert2/rules:/opt/elastalert/rules:ro
+        - ./phase-4-alerting/elastalert2/data:/opt/elastalert/data
+        - ./phase-4-alerting/elastalert2/smtp_auth.yaml:/opt/elastalert/smtp_auth.yaml:ro
+      entrypoint:
+        - sh
+        - -c
+        - |
+          python3 -c "
+          import os
+          t = open('/opt/elastalert/config.yaml.tpl').read()
+          for k, v in os.environ.items():
+              t = t.replace('\$' + k, v)
+          open('/tmp/config.yaml', 'w').write(t)
+          "
+          exec elastalert --config /tmp/config.yaml
+      depends_on:
+        elasticsearch:
+          condition: service_healthy
+      networks:
+        - elk-net
+      restart: unless-stopped
 
 volumes:
   es-data:
@@ -413,21 +519,8 @@ docker compose ps
 
 ```bash
 # 1. Check Elasticsearch health
-curl -X GET "http://localhost:9200/_cluster/health?pretty"
+curl -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health?pretty
 # Expected: "status" : "green" or "yellow"
-
-# 2. Check Elasticsearch is indexing
-curl -X GET "http://localhost:9200/_cat/indices?v"
-
-# 3. Check Logstash is running
-curl -X GET "http://localhost:9600/?pretty"
-
-# 4. Check Kibana
-curl -I http://localhost:5601
-# Expected: HTTP/1.1 302 Found
-
-# 5. Check all container statuses
-docker compose ps
 ```
 
 **Open Kibana in browser:**
@@ -440,8 +533,8 @@ http://<EC2_PUBLIC_IP>:5601
 ## ✅ Phase 1 Checklist
 
 - [ ] Terraform successfully provisions EC2 instance
-- [ ] All 4 containers (ES, Logstash, Kibana, Filebeat) show `Up` in `docker compose ps`
-- [ ] `curl localhost:9200/_cluster/health` returns green/yellow
+- [ ] All 5 containers (ES, Logstash, Kibana, Filebeat, ElastAlert2) show `Up` in `docker compose ps`
+- [ ] `curl -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health` returns green/yellow
 - [ ] Kibana loads in the browser at `:5601`
 - [ ] `docker compose logs elasticsearch` shows no errors
 
@@ -453,28 +546,33 @@ http://<EC2_PUBLIC_IP>:5601
 In Phase 1, we:
 - ✅ Provision EC2 instance with Terraform
 - ✅ Install Docker and Docker Compose
-- ✅ Start 4 containers: Elasticsearch, Logstash, Kibana, Filebeat
+- ✅ Start all containers: Elasticsearch, Logstash, Kibana, Filebeat, ElastAlert2
+- ✅ Configure security with TLS encryption and authentication
 - ✅ Verify all services are running and healthy
 
 **What we DON'T do in Phase 1:**
-- ❌ Configure log pipelines (Logstash filters/parsing)
-- ❌ Create Filebeat inputs or outputs
-- ❌ Ingest real logs
+- ❌ Create custom Kibana dashboards and visualizations
+- ❌ Configure advanced alerting rules (beyond basic ElastAlert2 setup)
+- ❌ Implement index lifecycle management policies
+- ❌ Configure advanced security features like RBAC roles and SAML
 
 ### Phase 2: Log Ingestion Pipelines
 In Phase 2, we:
-- ✅ Configure Filebeat to watch log files
-- ✅ Write Logstash pipelines (Grok filters, enrichment)
-- ✅ Create combined.conf pipeline
-- ✅ Start ingesting and parsing logs
+- ✅ Configure Filebeat to watch log files for nginx, application, and syslog
+- ✅ Write Logstash pipelines with Grok filters for log parsing and enrichment
+- ✅ Create combined.conf pipeline with geoIP and user-agent processing
+- ✅ Start ingesting and parsing real logs from simulated sources
 
 **Phase 2 Update to docker-compose.yml:**
+*(No changes needed - Filebeat and Logstash pipelines are already configured in Phase 1)*
 ```diff
-  logstash:
-    volumes:
-      - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
-      - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
-+     - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
+   logstash:
+     volumes:
+       - ./configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+       - ./configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+       - ./phase-2-log-ingestion/logstash/pipelines:/usr/share/logstash/pipeline:ro
+```
+When you're ready for Phase 2, you'll focus on creating test log data and verifying the parsing works correctly.
 ```
 
 When you're ready for Phase 2, uncomment that volume mount line and restart:
@@ -494,21 +592,28 @@ docker compose up -d
 cluster.name: elk-production
 node.name: elk-node-1
 
-# Network
 network.host: 0.0.0.0
 http.port: 9200
 
-# Discovery (single-node for this project)
-discovery.type: single-node
+# discovery.type must NOT be set to single-node in ES 9.x
+# (the setting was removed; single-node behaviour is auto-detected)
+# For ES 8.x only, you may keep: discovery.type: single-node
 
-# Memory lock (prevents swapping)
-bootstrap.memory_lock: true
+# ── Security (enabled by default in 8.x/9.x — config only) ────────────────
+xpack.security.enabled: true                  # explicit but redundant on 8+/9+
+xpack.security.enrollment.enabled: false      # true only if using Kibana token enrollment
 
-# Security — disable for Phase 1, enable in Phase 5
-xpack.security.enabled: false
-xpack.security.enrollment.enabled: false
+# TLS for HTTP layer (REST API)
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: certs/elastic-certificates.p12
 
-# Paths
+# TLS for transport layer (node-to-node communication).
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: certs/elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: certs/elastic-certificates.p12
+
 path.data: /usr/share/elasticsearch/data
 path.logs: /usr/share/elasticsearch/logs
 ```
@@ -521,10 +626,6 @@ server.host: "0.0.0.0"
 server.port: 5601
 server.name: "elk-kibana"
 
-# Point to Elasticsearch
-elasticsearch.hosts: ["http://elasticsearch:9200"]
-
-# Logging
 logging.appenders.file.type: file
 logging.appenders.file.fileName: /var/log/kibana/kibana.log
 logging.appenders.file.layout.type: json
@@ -585,8 +686,8 @@ cd /path/to/elk-stack-project
 docker compose up -d
 
 # 4. Test locally before AWS deployment
-curl http://localhost:9200/_cluster/health?pretty
-curl http://localhost:5601/  # Open in browser
+curl -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health?pretty
+curl -sk https://localhost:5601/  # Open in browser
 ```
 
 ---
@@ -623,7 +724,7 @@ docker compose logs elasticsearch | grep -i "started"
 # Kibana needs ~60 seconds after ES starts
 sleep 60
 
-# Then refresh browser at http://<EC2_IP>:5601
+# Then refresh browser at https://<EC2_IP>:5601
 ```
 
 ### Issue: Out of Memory Errors
@@ -664,7 +765,7 @@ docker compose ps | grep kibana
 # Verify inbound rule: 5601 from 0.0.0.0/0
 
 # 3. Test connectivity from EC2 instance
-curl -I http://localhost:5601
+curl -I -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:5601
 
 # 4. If using DNS, verify it resolves
 nslookup <your-domain>
@@ -674,30 +775,38 @@ nslookup <your-domain>
 
 ## Step 8 — Important Security Notes (For AWS)
 
+The basic security (TLS encryption and authentication) is already configured in Phase 1. For production deployment, consider these additional hardening steps:
+
 ### Before Production Deployment:
 
 1. **Restrict Security Groups:**
-   ```hcl
-   # Instead of 0.0.0.0/0, use your IP or office IP range
-   cidr_blocks = ["YOUR_IP/32"]
-   ```
+    ```hcl
+    # Instead of 0.0.0.0/0, use your IP or office IP range
+    cidr_blocks = ["YOUR_IP/32"]
+    ```
 
-2. **Enable Elasticsearch Authentication:**
-   - Phase 5 covers this in detail
-   - Set `xpack.security.enabled: true`
-   - Configure users and roles
+2. **Configure Advanced Security Features (Phase 5):**
+    - Set up Role-Based Access Control (RBAC) with custom roles
+    - Implement SAML or LDAP authentication for enterprise integration
+    - Configure audit logging for compliance
 
 3. **Use Private Subnets:**
-   - Don't expose Elasticsearch directly to internet
-   - Route through Nginx reverse proxy with authentication
+    - Don't expose Elasticsearch directly to internet
+    - Route through Nginx reverse proxy with authentication
+    - Consider using AWS PrivateLink for secure access
 
-4. **Enable TLS/SSL:**
-   - Certificates for all inter-node communication
-   - HTTPS for Kibana
+4. **Enable Encryption at Rest:**
+    - Configure EBS volume encryption for EC2 instance
+    - Consider encrypted snapshots for backup data
 
 5. **Set Up Backups:**
-   - Configure Elasticsearch snapshots to S3
-   - Regular backup schedule
+    - Configure Elasticsearch snapshots to S3
+    - Regular backup schedule with retention policies
+
+6. **Monitoring and Logging:**
+    - Enable X-Pack monitoring
+    - Set up logging for all ELK components
+    - Implement alerting for security events
 
 ---
 
@@ -728,9 +837,9 @@ nslookup <your-domain>
 - [ ] EC2 instance security group allows inbound on 22, 5601, 9200, 5044
 - [ ] Docker and Docker Compose installed on EC2
 - [ ] `vm.max_map_count=262144` set on EC2
-- [ ] All 5 containers (Elasticsearch, Logstash, Kibana, Filebeat, ElastAlert) show `Up` in `docker compose ps`
-- [ ] `curl localhost:9200/_cluster/health` returns green or yellow status
-- [ ] Kibana loads in browser at `http://<EC2_IP>:5601` without errors
+- [ ] All 5 containers (Elasticsearch, Logstash, Kibana, Filebeat, ElastAlert2) show `Up` in `docker compose ps`
+- [ ] `curl -sk -u elastic:${ELASTIC_PASSWORD} https://localhost:9200/_cluster/health` returns green or yellow status
+- [ ] Kibana loads in browser at `https://<EC2_IP>:5601` without errors
 - [ ] Kibana shows "Welcome to Elastic" or "Create your index pattern" page
 - [ ] No error logs in Elasticsearch container (`docker logs elasticsearch`)
 - [ ] SSH connectivity works with EC2 instance

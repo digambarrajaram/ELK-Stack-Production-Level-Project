@@ -398,17 +398,18 @@ Run these commands within your administrative control host to automate backup st
 ```bash
 # 1. Query the cluster database to extract explicit Dashboard ID parameters
 curl -X GET "http://localhost:5601/api/saved_objects/_find?type=dashboard&per_page=20" \
-  -H "kbn-xsrf: true" | python3 -m json.tool
+  -H "kbn-xsrf: true" -u elastic:${ELASTIC_PASSWORD} | python3 -m json.tool
 
 # 2. Export targeted analytics dashboards directly to your local file path
 curl -X GET "http://localhost:5601/api/kibana/dashboards/export?dashboard=<YOUR_EXTRACTED_DASHBOARD_ID>" \
-  -H "kbn-xsrf: true" \
+  -H "kbn-xsrf: true" -u elastic:${ELASTIC_PASSWORD} \
   -o phase-3-kibana-dashboards/dashboards/all-dashboards.ndjson
 
 # 3. Import saved configuration schema models onto clean target environments
 curl -X POST "http://localhost:5601/api/saved_objects/_import?createNewCopies=true" \
   -H "kbn-xsrf: true" \
   -H "Content-Type: multipart/form-data" \
+  -u elastic:${ELASTIC_PASSWORD} \
   --form file=@phase-3-kibana-dashboards/dashboards/all-dashboards.ndjson
 ```
 
