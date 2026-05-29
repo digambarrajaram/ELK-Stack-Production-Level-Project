@@ -333,7 +333,8 @@ else
   # Wait a little longer for ES to fully initialise security before testing
   sleep 15
 
-  HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+  CURL_FMT="%{http_code}"
+  HTTP_CODE=$(curl -sk -o /dev/null -w "$${CURL_FMT}" \
     -u "elastic:$${STORED_PASSWORD}" \
     https://localhost:9200/_cluster/health 2>/dev/null || echo "000")
 
