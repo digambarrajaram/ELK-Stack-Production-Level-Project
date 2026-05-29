@@ -15,7 +15,7 @@ LOG_FILE="/var/log/deploy-elk.log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
 APP_DIR="/home/ubuntu/elk-stack-app"
-CERTS_DIR="${APP_DIR}/configs/certs"
+CERTS_DIR="${APP_DIR}/security/certs"
 ES_IMAGE="docker.elastic.co/elasticsearch/elasticsearch:8.11.0"
 
 echo "======================================================"
