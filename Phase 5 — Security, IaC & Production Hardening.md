@@ -990,33 +990,112 @@ After bringing up all services, verify everything is working:
 # Check all containers are running and healthy
 docker compose ps
 
-# Verify ES security is active
-curl -u elastic:${ELASTIC_PASSWORD} \
+
+
+#1. Container health
+# All containers should show "healthy" or "Up"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# Check for any restart loops
+docker ps --format "table {{.Names}}\t{{.RestartCount}}\t{{.Status}}"
+
+
+
+#2. Elasticsearch
+# Cluster health — should return "green" or "yellow" (never "red")
+curl -sk -u elastic:${ELASTIC_PASSWORD} \
   --cacert ./security/certs/elastic-stack-ca.pem \
-  https://localhost:9200
+  https://localhost:9200/_cluster/health?pretty
 
-# Verify ILM policy exists
-curl -s https://localhost:9200/_ilm/policy/elk-logs-policy?pretty \
-  -u elastic:${ELASTIC_PASSWORD} \
-  --cacert ./security/certs/elastic-stack-ca.pem | jq '.elk-logs-policy.policy.phases | keys'
-
-# Check Kibana can connect (view logs for errors)
-docker compose logs kibana | tail -20
-
-# Check Logstash can connect (view logs for errors)
-docker compose logs logstash | tail -20
-
-# Test a user with restricted permissions
-curl -u logstash_internal:logstash_secure_password \
+# Node is up and recognized
+curl -sk -u elastic:${ELASTIC_PASSWORD} \
   --cacert ./security/certs/elastic-stack-ca.pem \
-  https://localhost:9200/_security/user  # Should return 403 (forbidden)
+  https://localhost:9200/_cat/nodes?v
 
-# Verify API key works (from Step 3.1 response)
-export API_KEY_ID="<from response>"
-export API_KEY="<from response>"
-curl -H "Authorization: ApiKey ${API_KEY_ID}:${API_KEY}" \
+# TLS is active — should NOT return data without credentials
+curl -sk https://localhost:9200
+# Expected: {"error":"..."," status":401}
+
+
+
+#3. Logstash
+# Check for pipeline errors
+docker compose logs logstash --tail=30 | grep -iE "error|warn|started|pipeline"
+
+# Logstash node API — should return pipeline status
+curl -sk http://localhost:9600/?pretty
+
+
+
+
+#4. Kibana
+# Kibana status — should return "available"
+curl -sk http://localhost:5601/api/status \
+  -u elastic:${ELASTIC_PASSWORD} | jq '.status.overall.level'
+
+# Check logs for ES connection errors
+docker compose logs kibana --tail=30 | grep -iE "error|warn|connected|unable"
+
+
+
+#5. Filebeat
+# Check Filebeat is shipping logs without errors
+docker compose logs filebeat --tail=30 | grep -iE "error|warn|harvester|published"
+
+# Verify filebeat index exists in ES
+curl -sk -u elastic:${ELASTIC_PASSWORD} \
   --cacert ./security/certs/elastic-stack-ca.pem \
-  https://localhost:9200
+  https://localhost:9200/_cat/indices/filebeat-*?v
+
+
+
+
+#6. ILM + Index templates
+# ILM policy exists
+curl -sk -u elastic:${ELASTIC_PASSWORD} \
+  --cacert ./security/certs/elastic-stack-ca.pem \
+  https://localhost:9200/_ilm/policy/elk-logs-policy?pretty | jq '.elk-logs-policy.policy.phases | keys'
+
+# Index templates are in place
+curl -sk -u elastic:${ELASTIC_PASSWORD} \
+  --cacert ./security/certs/elastic-stack-ca.pem \
+  https://localhost:9200/_cat/templates?v | grep -E "filebeat|logstash|elk"
+
+
+
+#7. End-to-end log flow
+# Send a test log event through Logstash
+echo '{"message":"elk-healthcheck-test","level":"info"}' \
+  | nc -q1 localhost 5000
+
+# Wait a few seconds, then check it landed in ES
+sleep 5
+curl -sk -u elastic:${ELASTIC_PASSWORD} \
+  --cacert ./security/certs/elastic-stack-ca.pem \
+  "https://localhost:9200/_search?q=message:elk-healthcheck-test&pretty" \
+  | jq '.hits.total.value'
+
+
+# Expected: 1
+
+#Run this to get a pass/fail overview of everything at once:
+echo "=== Containers ===" && docker ps --format "{{.Names}}: {{.Status}}" && \
+echo "=== ES Health ===" && curl -sk -u elastic:${ELASTIC_PASSWORD} --cacert ./security/certs/elastic-stack-ca.pem https://localhost:9200/_cluster/health | jq '.status' && \
+echo "=== Kibana ===" && curl -sk http://localhost:5601/api/status -u elastic:${ELASTIC_PASSWORD} | jq '.status.overall.level' && \
+echo "=== Logstash ===" && curl -sk http://localhost:9600 | jq '.status'
+
+
+
+#Expected healthy output:
+elasticsearch: Up 10 minutes (healthy)
+logstash:      Up 10 minutes
+kibana:        Up 10 minutes (healthy)
+filebeat:      Up 10 minutes
+
+"green"      ← ES cluster
+"available"  ← Kibana
+"green"      ← Logstash
+
 ```
 
 ---
