@@ -38,3 +38,11 @@ variable "elk_sg_id" {
 variable "project_repo" {
     description = "Project repo"
 }
+
+variable "elastic_password" {
+  description = "Elasticsearch superuser password"
+}
+
+variable "kibana_password" {
+  description = "Kibana system user password"
+}

@@ -58,3 +58,17 @@ variable "project_repo" {
   default     = "https://github.com/digambarrajaram/ELK-Stack-Production-Level-Project.git"
   description = "project_repo"
 }
+
+variable "elastic_password" {
+  description = "Elasticsearch superuser password"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "kibana_password" {
+  description = "Kibana system user password"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

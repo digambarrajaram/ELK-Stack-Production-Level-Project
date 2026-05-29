@@ -9,7 +9,9 @@ module "ec2" {
   igw_id           = module.vpc.igw_id
   elk_sg_id        = module.vpc.elk_sg_id
   project          = var.project
-  project_repo     = var.project_repo                                                           
+  project_repo     = var.project_repo
+  elastic_password = var.elastic_password
+  kibana_password  = var.kibana_password
  }
 
 module "vpc" {

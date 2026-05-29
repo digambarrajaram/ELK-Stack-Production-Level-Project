@@ -40,5 +40,8 @@ resource "aws_instance" "elk_instance" {
 
   user_data_base64 = base64encode(templatefile("${path.module}/user-data.sh", {
     project_repo = var.project_repo
+    env_file_content = file("${path.module}/.env")  # reads local file at plan time
+    elastic_password = var.elastic_password
+    kibana_password  = var.kibana_password
   }))
 }
