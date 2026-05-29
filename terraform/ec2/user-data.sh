@@ -3,8 +3,8 @@
 # Date: 29 May 2026
 # Production-grade ELK Stack Bootstrap Script (Terraform-safe)
 # Fixes applied:
-#   - All bash ${VAR} references escaped as $${VAR} for Terraform templatefile()
-#   - ${project_repo} is the ONLY Terraform-interpolated variable (single $)
+#   - All bash VAR references escaped as $${VAR} for Terraform templatefile()
+#   - project_repo is the ONLY Terraform-interpolated variable (single dollar-brace)
 #   - Docker group membership handled via 'sg docker' for subprocess
 #   - Inner failures surface and abort outer script cleanly
 #   - Post-deploy Elasticsearch health check added
@@ -25,13 +25,12 @@ echo "======================================================"
 # ------------------------------------------------------------------------------
 # PREFLIGHT: Validate required Terraform-injected variables
 # ------------------------------------------------------------------------------
-# TERRAFORM NOTE: This script must be rendered via templatefile(), e.g.:
-#   user_data_base64 = base64encode(templatefile("$${path.module}/user-data.sh", {
-#     project_repo = var.project_repo
-#   }))
+# TERRAFORM NOTE: Render this script via templatefile(), passing:
+#   { project_repo = var.project_repo }
 #
-# Rule: ${project_repo} = Terraform variable  (single $, resolved at plan/apply)
-#       $${ANY_BASH_VAR} = bash variable       (double $$, rendered as ${...} at runtime)
+# Escaping rule (applies in code AND comments - Terraform parses both):
+#   Single dollar-brace  = Terraform variable, resolved at plan/apply time
+#   Double dollar-brace  = bash variable, rendered as single dollar-brace at runtime
 
 PROJECT_REPO="${project_repo}"
 
@@ -84,9 +83,9 @@ fi
 
 chmod a+r /etc/apt/keyrings/docker.gpg
 
-# Capture arch and codename into variables first to avoid any interpolation ambiguity
-# FIX: bash vars referenced as $${ARCH} / $${UBUNTU_CODENAME} in templatefile context
-#      so Terraform does not try to resolve them as template variables.
+# Capture arch and codename into variables.
+# Use $${ARCH} and $${UBUNTU_CODENAME} so Terraform does not treat them
+# as template variables during templatefile() rendering.
 ARCH=$(dpkg --print-architecture)
 UBUNTU_CODENAME=$(lsb_release -cs)
 
@@ -105,9 +104,9 @@ apt-get install -y \
 systemctl enable docker
 systemctl start docker
 
-# Add ubuntu user to docker group
-# NOTE: usermod does not activate the group for already-running sessions.
-#       Use 'sg docker' in Step 5 to force the group context for subprocesses.
+# Add ubuntu user to docker group.
+# Group membership does not activate for already-running processes.
+# Use 'sg docker' in Step 5 to force the group context for subprocesses.
 usermod -aG docker ubuntu
 
 if ! command -v docker &> /dev/null; then
@@ -147,9 +146,9 @@ echo "[5/5] Deploying ELK Stack..."
 
 cd /home/ubuntu/elk-stack-app
 
-# FIX: 'usermod -aG docker ubuntu' does NOT activate the docker group for
-#      subprocesses in this script. 'sg docker' forces the group context,
-#      allowing 'docker compose' to run without permission errors.
+# usermod -aG docker ubuntu does NOT activate the docker group for subprocesses
+# already running in this script. 'sg docker' forces the group context so
+# docker compose runs without permission errors.
 
 if [ -f "docker-compose.yml" ] || [ -f "docker-compose.yaml" ]; then
   echo "Starting services using Docker Compose..."
