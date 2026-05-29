@@ -74,8 +74,17 @@ echo "[1/6] Fixing .env and loading environment variables..."
 sed -i 's/\r//' "${APP_DIR}/.env"
 
 # Load all non-comment variables into the current shell
-set +u  # temporarily allow unbound vars during source
-source "${APP_DIR}/.env"
+# Using a safe loop instead of `source` to handle values with spaces
+# (e.g. SMTP_PASS=qloq ccrf yygo ptrq would break `source`)
+set +u
+while IFS= read -r line || [ -n "$line" ]; do
+  # Skip comments and blank lines
+  [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+  # Only export valid KEY=VALUE lines
+  if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+    export "$line"
+  fi
+done < "${APP_DIR}/.env"
 set -u
 
 # Validate required variables are present and non-empty
