@@ -8,10 +8,21 @@ security/certs/
 *.p12
 
 # Terraform state
+# Ignore local Terraform directories
+.terraform/
+
+# Ignore Terraform state files
+*.tfstate
+*.tfstate.backup
+
+# Ignore any executable files
+*.exe
+
 terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.backup
 terraform/.terraform.lock.hcl
+phase-1-infrastructure/terraform/.terraform/providers/registry.terraform.io/hashicorp/aws/6.46.0/windows_amd64/terraform-provider-aws_v6.46.0_x5.exe
 
 # Kibana dashboard exports (optional — include if you want dashboards versioned)
 # phase-3-kibana-dashboards/dashboards/*.ndjson

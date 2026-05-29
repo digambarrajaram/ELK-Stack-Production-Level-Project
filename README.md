@@ -20,7 +20,11 @@ ELK_Stack/
 │   ├── logstash.yml              ← Logstash configuration
 │   └── pipelines.yml             ← Logstash pipeline config
 ├── phase-1-infrastructure/
-│   └── terraform/                ← Empty stubs (use terraform/ instead)
+│   └── terraform/
+│       ├── main.tf               ← EC2 instance resources
+|       ├── output.tf             ← EC2 outputs
+|       ├── variable.tf           ← EC2 variables
+|       └── provider.tf           ← AWS provider
 ├── phase-2-log-ingestion/
 │   ├── filebeat/
 │   │   └── filebeat.yml          ← Filebeat log collection config
